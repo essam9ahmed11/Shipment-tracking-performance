@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P&G Transportation Performance</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --pg-blue: #00529b;
+    --pg-blue-dark: #003d75;
+    --pg-light: #eaf2fb;
+    --pg-accent: #0a8a3c;
+    --pg-red: #c8102e;
+    --pg-amber: #f5a623;
+    --gray: #6b7280;
+    --line: #e2e8f0;
+    --bg: #f4f6fa;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: #1f2937;
+    font-size: 14px;
+  }
+  /* Header */
+  header {
+    background: linear-gradient(120deg, var(--pg-blue-dark), var(--pg-blue));
+    color: #fff;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    height: 64px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+  .logo {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: #fff; color: var(--pg-blue-dark);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 15px; letter-spacing: -1px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.2);
+  }
+  header h1 { font-size: 19px; font-weight: 600; }
+  header .sub { font-size: 12px; opacity: .8; font-weight: 400; }
+  header .meta { margin-left: auto; font-size: 11px; opacity: .75; text-align: right; }
+  /* Tabs */
+  .tabs {
+    display: flex; gap: 2px; background: var(--pg-blue-dark);
+    padding: 0 24px;
+  }
+  .tab {
+    padding: 12px 22px; color: #cdddef; cursor: pointer;
+    font-weight: 600; font-size: 13px; border: none; background: none;
+    border-bottom: 3px solid transparent; transition: .15s;
+  }
+  .tab:hover { color: #fff; }
+  .tab.active { color: #fff; border-bottom-color: var(--pg-amber); background: rgba(255,255,255,.06); }
+  /* Layout */
+  .container { padding: 18px 24px 60px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  /* Filters */
+  .filters {
+    background: var(--card); border-radius: 10px; padding: 14px 16px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.06); margin-bottom: 16px;
+    border: 1px solid var(--line);
+  }
+  .filters .f label { display: block; font-size: 11px; color: var(--gray);
+    font-weight: 600; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .03em; }
+  .filters select, .filters input {
+    width: 100%; padding: 7px 8px; border: 1px solid var(--line);
+    border-radius: 6px; font-size: 13px; background: #fbfdff;
+  }
+  .filters select:focus, .filters input:focus { outline: 2px solid var(--pg-light); border-color: var(--pg-blue); }
+  /* Multi-select searchable dropdown */
+  .ms { position: relative; }
+  .ms-btn {
+    width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
+    font-size: 13px; background: #fbfdff; cursor: pointer; text-align: left;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    min-height: 34px;
+  }
+  .ms-btn:hover { border-color: var(--pg-blue); }
+  .ms-btn.has { background: var(--pg-light); border-color: var(--pg-blue); }
+  .ms-btn .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2937; }
+  .ms-btn .txt.placeholder { color: var(--gray); }
+  .ms-btn .caret { color: var(--gray); font-size: 10px; flex-shrink: 0; }
+  .ms-panel {
+    display: none; position: absolute; z-index: 50; top: calc(100% + 4px); left: 0; right: 0;
+    background: #fff; border: 1px solid var(--pg-blue); border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.16); padding: 8px; max-height: 320px;
+    display: none; flex-direction: column;
+  }
+  .ms-panel.open { display: flex; }
+  .ms-search {
+    width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+    font-size: 12px; margin-bottom: 6px;
+  }
+  .ms-tools { display: flex; gap: 8px; margin-bottom: 6px; }
+  .ms-tools a { font-size: 11px; color: var(--pg-blue); cursor: pointer; font-weight: 600; }
+  .ms-tools a:hover { text-decoration: underline; }
+  .ms-list { overflow-y: auto; flex: 1; }
+  .ms-opt { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 5px;
+    font-size: 12px; cursor: pointer; }
+  .ms-opt:hover { background: var(--pg-light); }
+  .ms-opt input { width: auto; margin: 0; }
+  .ms-opt .cnt { margin-left: auto; color: var(--gray); font-size: 10px; }
+  .ms-empty { color: var(--gray); font-size: 12px; padding: 8px; text-align: center; }
+  .filter-actions { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; }
+  .btn {
+    background: var(--pg-blue); color: #fff; border: none; padding: 8px 18px;
+    border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; transition: .15s;
+  }
+  .btn:hover { background: var(--pg-blue-dark); }
+  .btn.ghost { background: #fff; color: var(--pg-blue); border: 1px solid var(--pg-blue); }
+  .btn.ghost:hover { background: var(--pg-light); }
+  .btn.sm { padding: 5px 12px; font-size: 12px; }
+  /* KPI cards */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+  .kpi {
+    background: var(--card); border-radius: 10px; padding: 16px 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06); border: 1px solid var(--line);
+    position: relative; overflow: hidden;
+  }
+  .kpi::before { content:''; position:absolute; left:0; top:0; bottom:0; width:5px; background: var(--pg-blue); }
+  .kpi.k1::before { background: var(--pg-blue); }
+  .kpi.k2::before { background: var(--pg-accent); }
+  .kpi.k3::before { background: var(--pg-amber); }
+  .kpi.k4::before { background: var(--gray); }
+  .kpi .label { font-size: 11px; color: var(--gray); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi .val { font-size: 30px; font-weight: 800; margin-top: 6px; color: var(--pg-blue-dark); }
+  .kpi .val small { font-size: 16px; font-weight: 600; color: var(--gray); }
+  .kpi .desc { font-size: 11px; color: var(--gray); margin-top: 4px; }
+  /* Section */
+  .section { background: var(--card); border-radius: 10px; padding: 16px 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06); border: 1px solid var(--line); margin-bottom: 18px; }
+  .section h2 { font-size: 15px; color: var(--pg-blue-dark); margin-bottom: 12px;
+    display:flex; align-items:center; gap:8px; }
+  .section h2 .pill { font-size: 11px; background: var(--pg-light); color: var(--pg-blue);
+    padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  /* Performance rows (carriers / lanes) */
+  .perf-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 1100px){ .perf-cols { grid-template-columns: 1fr; } }
+  .perf-list { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .perf-head, .perf-row {
+    display: grid;
+    grid-template-columns: 1fr 56px 56px 56px 64px;
+    align-items: center; gap: 6px;
+  }
+  .perf-head {
+    background: var(--pg-blue-dark); color: #fff; padding: 8px 12px;
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  }
+  .perf-head .rt2, .perf-row .rt2 { text-align: right; }
+  .perf-scroll { max-height: 420px; overflow-y: auto; }
+  .perf-row {
+    padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px;
+    cursor: pointer; transition: background .12s;
+  }
+  .perf-row:hover { background: var(--pg-light); }
+  .perf-row:last-child { border-bottom: none; }
+  .perf-row.sel { background: #dcebfb; box-shadow: inset 3px 0 0 var(--pg-blue); }
+  .perf-row .nm {
+    font-weight: 600; color: var(--pg-blue-dark); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .perf-row .v { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .perf-row .v.ship { color: var(--gray); }
+  .perf-row .v small { font-weight: 600; color: var(--gray); font-size: 9px; }
+  /* color thresholds */
+  .v.good { color: var(--pg-accent); }
+  .v.mid  { color: var(--pg-amber); }
+  .v.bad  { color: var(--pg-red); }
+  .perf-search {
+    width: 100%; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+    font-size: 12px; margin-bottom: 8px;
+  }
+  .perf-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .perf-title h3 { font-size: 13px; color: var(--pg-blue-dark); display:flex; align-items:center; gap:8px; }
+  /* Trend controls */
+  .trend-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:14px; }
+  .trend-controls .f { min-width: 220px; }
+  .trend-controls label { display:block; font-size:11px; color:var(--gray); font-weight:600; margin-bottom:4px; text-transform:uppercase; }
+  .trend-controls select { padding:7px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; min-width:220px; }
+  .toggle { display:inline-flex; border:1px solid var(--pg-blue); border-radius:6px; overflow:hidden; }
+  .toggle button { border:none; background:#fff; color:var(--pg-blue); padding:7px 16px; cursor:pointer; font-weight:600; font-size:12px; }
+  .toggle button.active { background: var(--pg-blue); color:#fff; }
+  .chart-wrap { position: relative; height: 300px; }
+  .two-col { display:grid; grid-template-columns: 2fr 1fr; gap:16px; }
+  @media (max-width: 1100px){ .two-col{ grid-template-columns:1fr; } .kpi-row{ grid-template-columns:repeat(2,1fr);} }
+  /* Reason table */
+  table.rt { width:100%; border-collapse: collapse; font-size:12px; }
+  table.rt th { text-align:left; color:var(--gray); font-size:10px; text-transform:uppercase; padding:6px 8px; border-bottom:2px solid var(--line); }
+  table.rt td { padding:6px 8px; border-bottom:1px solid var(--line); }
+  table.rt tr:hover td { background: var(--pg-light); }
+  table.rt td.num { text-align:right; font-weight:700; color:var(--pg-blue); }
+  .reason-bar { height:14px; background:var(--pg-light); border-radius:3px; position:relative; }
+  .reason-bar > i { position:absolute; left:0; top:0; bottom:0; background:var(--pg-blue); border-radius:3px; }
+  /* Order timeline */
+  .legend { display:flex; flex-wrap:wrap; gap:14px; margin-bottom:12px; font-size:12px; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:14px; height:14px; border-radius:3px; display:inline-block; }
+  .timeline-row { display:grid; grid-template-columns: 220px 1fr; gap:12px; padding:8px 0; border-bottom:1px solid var(--line); align-items:center; }
+  .timeline-row .info { font-size:11px; }
+  .timeline-row .info .ln { font-weight:700; color:var(--pg-blue-dark); }
+  .timeline-row .info .sub { color:var(--gray); }
+  .tl { position:relative; height:42px; }
+  .tl .track { position:absolute; left:0; right:0; top:20px; height:2px; background:var(--line); }
+  .tl .pt { position:absolute; transform:translateX(-50%); top:9px; }
+  .tl .pt .dot { width:13px; height:13px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.15); margin:0 auto; }
+  .tl .pt .lbl { font-size:8.5px; color:var(--gray); white-space:nowrap; margin-top:2px; text-align:center; transform:translateX(-50%); position:relative; left:50%; }
+  .muted { color: var(--gray); font-size: 13px; }
+  .loading { text-align:center; color:var(--gray); padding:30px; }
+  .coming { text-align:center; padding:80px 20px; color:var(--gray); }
+  .coming .big { font-size: 40px; margin-bottom: 12px; }
+  .spin { display:inline-block; width:16px; height:16px; border:3px solid var(--pg-light); border-top-color:var(--pg-blue); border-radius:50%; animation:sp 1s linear infinite; vertical-align:middle; }
+  @keyframes sp { to { transform: rotate(360deg);} }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .chip { background:var(--pg-light); color:var(--pg-blue); border-radius:12px; padding:3px 10px; font-size:11px; display:flex; gap:6px; align-items:center; }
+  .chip b{ font-weight:700;}
+  .chip x { cursor:pointer; font-weight:700; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">P&amp;G</div>
+  <div>
+    <h1>Transportation Performance</h1>
+    <div class="sub">Supply Chain · North America Intersite</div>
+  </div>
+  <div class="meta">
+    Data as of <b id="loadedAt">{{ loaded_at }}</b><br>
+    Anchor day <b>{{ anchor }}</b>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" data-tab="perf">Performance Review</button>
+  <button class="tab" data-tab="orders">Order Analysis</button>
+  <button class="tab" data-tab="ops">Operational Review</button>
+</div>
+
+<div class="container">
+
+  <!-- ================= PERFORMANCE REVIEW ================= -->
+  <div class="panel active" id="panel-perf">
+    <div class="filters" id="perfFilters"></div>
+
+    <div class="kpi-row" id="kpiRow">
+      <div class="kpi k1"><div class="label">SOT 1st</div><div class="val" id="kSot1">–</div><div class="desc">Shipped vs first commitment</div></div>
+      <div class="kpi k2"><div class="label">SOT Final</div><div class="val" id="kSotf">–</div><div class="desc">Shipped vs final commitment</div></div>
+      <div class="kpi k3"><div class="label">IOT</div><div class="val" id="kIot">–</div><div class="desc">Inventory On Time = Yes</div></div>
+      <div class="kpi k4"><div class="label"># Shipments</div><div class="val" id="kShip">–</div><div class="desc">Loads shipped</div></div>
+    </div>
+
+    <div class="section">
+      <h2>Performance by Carrier &amp; Lane</h2>
+      <div class="perf-cols">
+        <!-- Carriers (left) -->
+        <div>
+          <div class="perf-title">
+            <h3>Carriers <span class="pill" id="carrierCount">0</span></h3>
+          </div>
+          <input class="perf-search" id="carrierSearch" placeholder="Search carrier…">
+          <div class="perf-list">
+            <div class="perf-head">
+              <div>Carrier</div><div class="rt2">SOT 1st</div><div class="rt2">SOT Fnl</div><div class="rt2">IOT</div><div class="rt2"># Ship</div>
+            </div>
+            <div class="perf-scroll" id="carrierRows"><div class="loading"><span class="spin"></span> Loading…</div></div>
+          </div>
+        </div>
+        <!-- Lanes (right) -->
+        <div>
+          <div class="perf-title">
+            <h3>Lanes <span class="pill" id="laneCount">0</span> <span style="font-size:10px;color:var(--gray);font-weight:500;">Shipping → Destination plant</span></h3>
+          </div>
+          <input class="perf-search" id="laneSearch" placeholder="Search lane (plant → plant)…">
+          <div class="perf-list">
+            <div class="perf-head">
+              <div>Lane</div><div class="rt2">SOT 1st</div><div class="rt2">SOT Fnl</div><div class="rt2">IOT</div><div class="rt2"># Ship</div>
+            </div>
+            <div class="perf-scroll" id="laneRows"><div class="loading"><span class="spin"></span> Loading…</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Trend Explorer — Misses Over Time</h2>
+      <div class="trend-controls">
+        <div class="f">
+          <label>Dimension</label>
+          <select id="trendDim">
+            <option value="carrier">By Carrier</option>
+            <option value="lane">By Lane</option>
+            <option value="service">By Service Type</option>
+          </select>
+        </div>
+        <div class="f">
+          <label id="trendValLabel">Carrier</label>
+          <select id="trendVal"></select>
+        </div>
+        <div class="f">
+          <label>Window</label>
+          <div class="toggle" id="granToggle">
+            <button data-g="week" class="active">Past Week</button>
+            <button data-g="month">Past Month</button>
+          </div>
+        </div>
+      </div>
+      <div class="two-col">
+        <div>
+          <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+        </div>
+        <div>
+          <h2 style="font-size:13px;">Reason Codes <span class="pill" id="reasonTotal"></span></h2>
+          <table class="rt"><thead><tr><th>Reason (CSOT updated)</th><th style="text-align:right;">Orders</th><th style="width:90px;"></th></tr></thead>
+          <tbody id="reasonBody"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= ORDER ANALYSIS ================= -->
+  <div class="panel" id="panel-orders">
+    <div class="filters" id="orderFilters"></div>
+    <div class="section">
+      <h2>Order Date Timeline <span class="pill" id="orderCount"></span></h2>
+      <div class="legend">
+        <span><i style="background:#9aa5b1;"></i> Old Pickup (1st commit)</span>
+        <span><i style="background:#00529b;"></i> New Pickup (final commit)</span>
+        <span><i style="background:#0a8a3c;"></i> Checkout (actual ship)</span>
+        <span><i style="background:#f5a623;"></i> Requested Delivery</span>
+        <span><i style="background:#c8102e;"></i> Actual Arrival</span>
+      </div>
+      <div id="timeline"><div class="loading"><span class="spin"></span> Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ================= OPERATIONAL REVIEW ================= -->
+  <div class="panel" id="panel-ops">
+    <div class="coming">
+      <div class="big">🚧</div>
+      <h2 style="color:var(--pg-blue-dark);">Operational Review</h2>
+      <p>Coming soon.</p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const ANCHOR = "{{ anchor }}";
+let FILTERS = {};          // field -> [values]
+let FILTER_META = null;    // distinct values + labels
+let trendChart = null;
+let granularity = 'week';
+
+// ---------- helpers ----------
+function fmtPct(v){ return v==null ? '<small>n/a</small>' : v + '<small>%</small>'; }
+function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e; }
+async function postJSON(url, body){ const r= await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
+
+// ---------- tabs ----------
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('panel-'+t.dataset.tab).classList.add('active');
+    if(t.dataset.tab==='orders') loadOrders();
+  };
+});
+
+// ---------- build filters ----------
+const FILTER_FIELDS = ['shipping_plant','destination_plant','lane_pd','tms_carrier_name','service_type','destination_city','is_oral_care','load_number'];
+
+// selected values per container+field: SELS[containerId][field] = Set
+const SELS = { perfFilters:{}, orderFilters:{} };
+
+async function initFilters(){
+  FILTER_META = await (await fetch('/api/filters')).json();
+  buildFilterUI('perfFilters');
+  buildFilterUI('orderFilters');
+}
+
+function buildFilterUI(containerId){
+  const c = document.getElementById(containerId);
+  c.innerHTML='';
+  SELS[containerId] = {};
+  FILTER_FIELDS.forEach(field=>{
+    SELS[containerId][field] = new Set();
+    const vals = FILTER_META[field] || [];
+    const wrap = el('div','f');
+    wrap.appendChild(el('label',null, FILTER_META._labels[field] || field));
+    wrap.appendChild(buildMultiSelect(containerId, field, vals));
+    c.appendChild(wrap);
+  });
+  // Material number note (not available at load grain)
+  const note = el('div','f');
+  note.innerHTML = '<label>Material Number</label><input disabled placeholder="n/a at load grain" title="Tracking table is load-level; material not available">';
+  c.appendChild(note);
+
+  const actions = el('div','filter-actions');
+  const apply = el('button','btn','Apply Filters');
+  apply.onclick = ()=> (containerId==='perfFilters' ? refreshAll() : loadOrders());
+  const reset = el('button','btn ghost','Reset');
+  reset.onclick = ()=>{
+    Object.values(SELS[containerId]).forEach(s=>s.clear());
+    c.querySelectorAll('.ms').forEach(ms=>updateMsButton(ms));
+    (containerId==='perfFilters' ? refreshAll() : loadOrders());
+  };
+  actions.appendChild(apply); actions.appendChild(reset);
+  c.appendChild(actions);
+}
+
+function buildMultiSelect(containerId, field, vals){
+  const ms = el('div','ms');
+  ms.dataset.field = field;
+  ms.dataset.container = containerId;
+
+  const btn = el('button','ms-btn');
+  btn.type = 'button';
+  btn.innerHTML = '<span class="txt placeholder">All</span><span class="caret">▼</span>';
+  ms.appendChild(btn);
+
+  const panel = el('div','ms-panel');
+  const search = el('input','ms-search');
+  search.placeholder = 'Search…';
+  panel.appendChild(search);
+
+  const tools = el('div','ms-tools');
+  const selAll = el('a',null,'Select all');
+  const clr = el('a',null,'Clear');
+  tools.appendChild(selAll); tools.appendChild(clr);
+  panel.appendChild(tools);
+
+  const list = el('div','ms-list');
+  panel.appendChild(list);
+  ms.appendChild(panel);
+
+  const sset = SELS[containerId][field];
+  const capped = vals.length > 2000;
+
+  function renderList(q){
+    q = (q||'').toLowerCase();
+    let shown = vals;
+    if(q) shown = vals.filter(v=>String(v).toLowerCase().includes(q));
+    if(capped && !q){
+      list.innerHTML = '<div class="ms-empty">'+vals.length.toLocaleString()+' values — type to search</div>';
+      // still show selected ones
+      if(sset.size){
+        [...sset].slice(0,300).forEach(v=> list.appendChild(makeOpt(v)));
+      }
+      return;
+    }
+    shown = shown.slice(0, 500);
+    if(!shown.length){ list.innerHTML='<div class="ms-empty">No matches</div>'; return; }
+    list.innerHTML='';
+    shown.forEach(v=> list.appendChild(makeOpt(v)));
+  }
+  function makeOpt(v){
+    const opt = el('label','ms-opt');
+    const cb = el('input'); cb.type='checkbox'; cb.checked = sset.has(v);
+    cb.onchange = ()=>{ cb.checked ? sset.add(v) : sset.delete(v); updateMsButton(ms); };
+    opt.appendChild(cb);
+    opt.appendChild(el('span',null, escapeHtml(String(v))));
+    return opt;
+  }
+
+  btn.onclick = (e)=>{
+    e.stopPropagation();
+    document.querySelectorAll('.ms-panel.open').forEach(p=>{ if(p!==panel) p.classList.remove('open'); });
+    const willOpen = !panel.classList.contains('open');
+    panel.classList.toggle('open', willOpen);
+    if(willOpen){ search.value=''; renderList(''); search.focus(); }
+  };
+  search.oninput = ()=> renderList(search.value);
+  search.onclick = (e)=> e.stopPropagation();
+  panel.onclick = (e)=> e.stopPropagation();
+  selAll.onclick = ()=>{
+    const q = search.value.toLowerCase();
+    (q ? vals.filter(v=>String(v).toLowerCase().includes(q)) : vals).slice(0,2000).forEach(v=>sset.add(v));
+    renderList(search.value); updateMsButton(ms);
+  };
+  clr.onclick = ()=>{ sset.clear(); renderList(search.value); updateMsButton(ms); };
+
+  ms._render = renderList;
+  return ms;
+}
+
+function updateMsButton(ms){
+  const field = ms.dataset.field;
+  const cont = ms.dataset.container;
+  const sset = SELS[cont][field];
+  const txt = ms.querySelector('.txt');
+  ms.querySelector('.ms-btn').classList.toggle('has', sset.size>0);
+  if(sset.size===0){ txt.className='txt placeholder'; txt.textContent='All'; }
+  else if(sset.size===1){ txt.className='txt'; txt.textContent=[...sset][0]; }
+  else { txt.className='txt'; txt.textContent=sset.size+' selected'; }
+}
+
+// close panels on outside click
+document.addEventListener('click', ()=> document.querySelectorAll('.ms-panel.open').forEach(p=>p.classList.remove('open')));
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+function collectFilters(containerId){
+  const f = {};
+  const sels = SELS[containerId] || {};
+  Object.entries(sels).forEach(([field, sset])=>{
+    if(sset && sset.size) f[field] = [...sset];
+  });
+  return f;
+}
+
+// ---------- performance ----------
+async function refreshAll(){
+  FILTERS = collectFilters('perfFilters');
+  // sync order filters too
+  await loadPerformance();
+  await loadTrendValues();
+  await loadTrend();
+}
+
+let CARRIER_CARDS = [], LANE_CARDS = [];
+
+async function loadPerformance(){
+  const d = await postJSON('/api/performance', {filters: FILTERS});
+  document.getElementById('kSot1').innerHTML = fmtPct(d.overall.sot_1st);
+  document.getElementById('kSotf').innerHTML = fmtPct(d.overall.sot_fnl);
+  document.getElementById('kIot').innerHTML = fmtPct(d.overall.iot);
+  document.getElementById('kShip').innerHTML = d.overall.num_shipments.toLocaleString();
+
+  CARRIER_CARDS = d.carrier_cards || [];
+  LANE_CARDS = d.lane_cards || [];
+  document.getElementById('carrierCount').textContent = CARRIER_CARDS.length;
+  document.getElementById('laneCount').textContent = LANE_CARDS.length;
+  renderPerfRows('carrierRows', CARRIER_CARDS, 'carrier', document.getElementById('carrierSearch').value);
+  renderPerfRows('laneRows', LANE_CARDS, 'lane', document.getElementById('laneSearch').value);
+}
+
+function pctClass(v){ if(v==null) return ''; if(v>=90) return 'good'; if(v>=75) return 'mid'; return 'bad'; }
+function pctCell(v){ return `<div class="v ${pctClass(v)}">${v==null?'<small>n/a</small>':v+'<small>%</small>'}</div>`; }
+
+function renderPerfRows(containerId, cards, kind, query){
+  const box = document.getElementById(containerId);
+  query = (query||'').toLowerCase();
+  let rows = cards;
+  if(query) rows = cards.filter(c=> String(c[kind]).toLowerCase().includes(query));
+  if(!rows.length){ box.innerHTML='<div class="muted" style="padding:14px;">No data for selected filters.</div>'; return; }
+  box.innerHTML = rows.slice(0,300).map(c=>{
+    const name = escapeHtml(c[kind]);
+    return `<div class="perf-row" data-kind="${kind}" data-val="${name}" title="${name}">
+      <div class="nm">${name}</div>
+      ${pctCell(c.sot_1st)}${pctCell(c.sot_fnl)}${pctCell(c.iot)}
+      <div class="v ship">${c.num_shipments.toLocaleString()}</div>
+    </div>`;
+  }).join('');
+  // click a row -> drive the trend explorer
+  box.querySelectorAll('.perf-row').forEach(r=>{
+    r.onclick = ()=>{
+      box.querySelectorAll('.perf-row').forEach(x=>x.classList.remove('sel'));
+      r.classList.add('sel');
+      const dim = kind==='carrier' ? 'carrier' : 'lane';
+      document.getElementById('trendDim').value = dim;
+      document.getElementById('trendValLabel').textContent = dim==='carrier'?'Carrier':'Lane';
+      loadTrendValues().then(()=>{
+        const sel = document.getElementById('trendVal');
+        sel.value = r.dataset.val;
+        loadTrend();
+        document.getElementById('trendChart').scrollIntoView({behavior:'smooth', block:'center'});
+      });
+    };
+  });
+}
+
+// live search on perf lists
+document.getElementById('carrierSearch').oninput = (e)=> renderPerfRows('carrierRows', CARRIER_CARDS, 'carrier', e.target.value);
+document.getElementById('laneSearch').oninput = (e)=> renderPerfRows('laneRows', LANE_CARDS, 'lane', e.target.value);
+
+// ---------- trend ----------
+document.getElementById('trendDim').onchange = async ()=>{
+  const dim = document.getElementById('trendDim').value;
+  document.getElementById('trendValLabel').textContent = dim==='carrier'?'Carrier':dim==='lane'?'Lane':'Service Type';
+  await loadTrendValues(); await loadTrend();
+};
+document.getElementById('trendVal').onchange = ()=> loadTrend();
+document.querySelectorAll('#granToggle button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('#granToggle button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active'); granularity=b.dataset.g; loadTrend();
+  };
+});
+
+async function loadTrendValues(){
+  const dim = document.getElementById('trendDim').value;
+  const vals = await postJSON('/api/dimension_values', {filters: FILTERS, dimension: dim});
+  const sel = document.getElementById('trendVal');
+  sel.innerHTML = '<option value="__ALL__">All (combined)</option>' +
+    vals.slice(0,500).map(v=>`<option value="${escapeHtml(v.value)}">${escapeHtml(v.value)} (${v.count})</option>`).join('');
+}
+
+async function loadTrend(){
+  const dim = document.getElementById('trendDim').value;
+  const val = document.getElementById('trendVal').value;
+  const d = await postJSON('/api/trend', {filters: FILTERS, dimension: dim, value: val, granularity});
+  renderTrendChart(d);
+  renderReasons(d.reasons);
+}
+
+function renderTrendChart(d){
+  const ctx = document.getElementById('trendChart');
+  const cfg = {
+    type:'line',
+    data:{ labels: d.labels.map(x=>x.slice(5)), datasets:[
+      {label:'SOT 1st', data:d.sot_1st, borderColor:'#00529b', backgroundColor:'#00529b22', tension:.3, spanGaps:true},
+      {label:'SOT Fnl', data:d.sot_fnl, borderColor:'#0a8a3c', backgroundColor:'#0a8a3c22', tension:.3, spanGaps:true},
+      {label:'IOT', data:d.iot, borderColor:'#f5a623', backgroundColor:'#f5a62322', tension:.3, spanGaps:true},
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{position:'top'}, tooltip:{callbacks:{afterBody:(it)=>{
+        const i=it[0].dataIndex; return 'Shipments: '+(d.counts[i]||0);
+      }}}},
+      scales:{ y:{ min:0, max:100, ticks:{callback:v=>v+'%'} } }
+    }
+  };
+  if(trendChart) trendChart.destroy();
+  trendChart = new Chart(ctx, cfg);
+}
+
+function renderReasons(reasons){
+  const body = document.getElementById('reasonBody');
+  const total = reasons.reduce((a,b)=>a+b.count,0);
+  document.getElementById('reasonTotal').textContent = total.toLocaleString()+' orders';
+  const max = reasons.length? reasons[0].count : 1;
+  body.innerHTML = reasons.slice(0,12).map(r=>`
+    <tr><td>${escapeHtml(r.reason)}</td><td class="num">${r.count.toLocaleString()}</td>
+    <td><div class="reason-bar"><i style="width:${(r.count/max*100).toFixed(0)}%"></i></div></td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">No data.</td></tr>';
+}
+
+// ---------- order analysis ----------
+async function loadOrders(){
+  const f = collectFilters('orderFilters');
+  const tl = document.getElementById('timeline');
+  tl.innerHTML = '<div class="loading"><span class="spin"></span> Loading…</div>';
+  const d = await postJSON('/api/orders', {filters: f, limit: 60});
+  document.getElementById('orderCount').textContent = d.total.toLocaleString()+' loads (showing '+d.orders.length+')';
+  if(!d.orders.length){ tl.innerHTML='<div class="muted">No loads for selected filters.</div>'; return; }
+  renderTimeline(d.orders, tl);
+}
+
+function renderTimeline(orders, container){
+  // Determine global min/max date across milestones to scale
+  const points = ['old_pickup_date','newest_pickup_date','checkout_date','requested_delivery_date','actual_arrival_date'];
+  const colors = {old_pickup_date:'#9aa5b1', newest_pickup_date:'#00529b', checkout_date:'#0a8a3c', requested_delivery_date:'#f5a623', actual_arrival_date:'#c8102e'};
+  container.innerHTML='';
+  orders.forEach(o=>{
+    const ds = points.map(p=>o[p]).filter(Boolean).map(s=>new Date(s).getTime());
+    if(!ds.length) return;
+    const min = Math.min(...ds), max=Math.max(...ds);
+    const span = (max-min)||1;
+    const row = el('div','timeline-row');
+    row.innerHTML = `<div class="info">
+      <div class="ln">${escapeHtml(o.load_number)} · ${escapeHtml(o.order_number||'—')}</div>
+      <div class="sub">${escapeHtml(o.carrier||'—')} · ${escapeHtml(o.service_type||'')}</div>
+      <div class="sub">${escapeHtml(o.lane||'')}</div>
+      <div class="sub">IOT: <b style="color:${o.iot_on_time==='Yes'?'#0a8a3c':'#c8102e'}">${o.iot_on_time||'—'}</b></div>
+    </div>`;
+    const tl = el('div','tl'); tl.innerHTML = '<div class="track"></div>';
+    points.forEach(p=>{
+      if(!o[p]) return;
+      const t = new Date(o[p]).getTime();
+      const x = ((t-min)/span)*100;
+      const pt = el('div','pt'); pt.style.left = x+'%';
+      pt.innerHTML = `<div class="dot" style="background:${colors[p]}" title="${p}: ${o[p]}"></div>
+        <div class="lbl">${o[p].slice(5)}</div>`;
+      tl.appendChild(pt);
+    });
+    row.appendChild(tl);
+    container.appendChild(row);
+  });
+}
+
+// ---------- init ----------
+(async function(){
+  await initFilters();
+  await refreshAll();
+})();
+</script>
+</body>
+</html>

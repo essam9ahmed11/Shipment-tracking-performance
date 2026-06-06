@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data cache (regenerable via data_loader.py --refresh)
+*.pkl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
