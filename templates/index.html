@@ -223,6 +223,23 @@
   .chip { background:var(--pg-light); color:var(--pg-blue); border-radius:12px; padding:3px 10px; font-size:11px; display:flex; gap:6px; align-items:center; }
   .chip b{ font-weight:700;}
   .chip x { cursor:pointer; font-weight:700; }
+  /* Reassignment lists use a 5-column grid */
+  .reassign-head, .perf-row.reassign-row {
+    grid-template-columns: 1fr 70px 90px 70px 70px;
+  }
+  /* "About" tab */
+  .about-wrap { padding: 4px 4px 30px; }
+  .about-wrap h2 { color: var(--pg-blue-dark); font-size: 18px; margin: 18px 0 6px; }
+  .about-wrap h3 { color: var(--pg-blue); font-size: 14px; margin: 14px 0 6px; }
+  .about-wrap p, .about-wrap li { font-size: 13px; line-height: 1.55; color: #333; }
+  .about-wrap ul { padding-left: 22px; margin: 6px 0 12px; }
+  .about-wrap code { background: var(--pg-light); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--pg-blue-dark); }
+  .about-wrap table.measures { width:100%; border-collapse: collapse; font-size:12.5px; margin: 6px 0 14px; }
+  .about-wrap table.measures th { text-align:left; background: var(--pg-blue-dark); color:#fff; padding:8px 10px; font-size:11px; text-transform:uppercase; }
+  .about-wrap table.measures td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align: top; }
+  .about-wrap table.measures tr:nth-child(even) td { background: #fafbfc; }
+  .about-wrap .formula { font-family: ui-monospace, Consolas, monospace; background: #f5f7fa; border-left: 3px solid var(--pg-blue); padding: 8px 12px; margin: 6px 0; font-size: 12.5px; border-radius: 0 4px 4px 0; }
+  .about-wrap .callout { background: #fff8e1; border-left: 4px solid var(--pg-amber); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 10px 0; font-size: 13px; color: #5a4a00; }
 </style>
 </head>
 <body>
@@ -242,6 +259,7 @@
   <button class="tab active" data-tab="perf">Performance Review</button>
   <button class="tab" data-tab="orders">Order Analysis</button>
   <button class="tab" data-tab="ops">Operational Review</button>
+  <button class="tab" data-tab="about">About</button>
 </div>
 
 <div class="container">
@@ -263,7 +281,7 @@
         <!-- Carriers (left) -->
         <div>
           <div class="perf-title">
-            <h3>Carriers <span class="pill" id="carrierCount">0</span></h3>
+            <h3>Carriers <span class="pill" id="carrierCount">0</span> <span style="font-size:10px;color:var(--gray);font-weight:500;" title="SOT 1st is attributed to the carrier on the first commitment (old_carrier_name). SOT Final &amp; IOT are attributed to the carrier on the final commitment / delivery (newest_carrier_name).">Split attribution &#9432;</span></h3>
           </div>
           <input class="perf-search" id="carrierSearch" placeholder="Search carrier…">
           <div class="perf-list">
@@ -323,6 +341,51 @@
         </div>
       </div>
     </div>
+
+    <!-- Carrier reassignments / drops -->
+    <div class="section">
+      <h2>Carrier Reassignments — Loads Dropped After 1st Commitment
+        <span class="pill" id="reassignSummary">–</span>
+      </h2>
+      <p class="muted" style="margin-bottom:10px;">
+        A reassignment / drop = a load where the carrier on the <b>first</b> commitment differs from the carrier on the <b>final</b> commitment.
+        Attributed to the <i>old</i> carrier (the one that lost the load) and to the lane.
+      </p>
+      <div class="perf-cols">
+        <div>
+          <div class="perf-title">
+            <h3>By Carrier (dropped from) <span class="pill" id="reassignCarrierCount">0</span></h3>
+          </div>
+          <input class="perf-search" id="reassignCarrierSearch" placeholder="Search carrier…">
+          <div class="perf-list">
+            <div class="perf-head reassign-head">
+              <div>Carrier</div>
+              <div class="rt2"># Dropped</div>
+              <div class="rt2"># 1st commits</div>
+              <div class="rt2">% of own</div>
+              <div class="rt2">% of total</div>
+            </div>
+            <div class="perf-scroll" id="reassignCarrierRows"><div class="loading"><span class="spin"></span> Loading…</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="perf-title">
+            <h3>By Lane <span class="pill" id="reassignLaneCount">0</span></h3>
+          </div>
+          <input class="perf-search" id="reassignLaneSearch" placeholder="Search lane…">
+          <div class="perf-list">
+            <div class="perf-head reassign-head">
+              <div>Lane</div>
+              <div class="rt2"># Dropped</div>
+              <div class="rt2"># Loads</div>
+              <div class="rt2">% of lane</div>
+              <div class="rt2">% of total</div>
+            </div>
+            <div class="perf-scroll" id="reassignLaneRows"><div class="loading"><span class="spin"></span> Loading…</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ================= ORDER ANALYSIS ================= -->
@@ -347,6 +410,145 @@
       <div class="big">🚧</div>
       <h2 style="color:var(--pg-blue-dark);">Operational Review</h2>
       <p>Coming soon.</p>
+    </div>
+  </div>
+
+  <!-- ================= ABOUT ================= -->
+  <div class="panel" id="panel-about">
+    <div class="section about-wrap">
+      <h2>About this tool</h2>
+      <p>
+        <b>Transportation Performance</b> is an interactive dashboard for monitoring P&amp;G North America
+        intersite shipment execution. It pulls the OCNA shipment tracking table from Databricks
+        (<code>hive_metastore.userdb_essam_ae.ocna_shipment_tracking_intersite</code>) into memory and serves
+        analytics over a single TMS-load-level dataset.
+      </p>
+      <p>
+        Every row in the source represents one <b>TMS load</b>. The same order can appear on multiple loads.
+        All measures below are computed at <b>load grain</b>.
+      </p>
+
+      <h2>Tabs</h2>
+      <h3>1. Performance Review</h3>
+      <ul>
+        <li><b>KPI strip</b> — overall SOT 1st, SOT Final, IOT, and # Shipments for the filtered population.</li>
+        <li><b>Carriers panel</b> — per-carrier KPIs with <i>split attribution</i> (see Measures below).</li>
+        <li><b>Lanes panel</b> — per-lane KPIs. Lane = <code>shipping_plant → destination_plant</code>.</li>
+        <li><b>Trend Explorer</b> — day-by-day SOT 1st / SOT Final / IOT for the selected carrier, lane, or service type, with reason-code breakdown.</li>
+        <li><b>Carrier Reassignments</b> — at the bottom, ranks carriers (and lanes) by how often a load was reassigned <i>off</i> them after the first commitment.</li>
+      </ul>
+
+      <h3>2. Order Analysis</h3>
+      <p>Per-load timeline: Old Pickup (1st commitment) → New Pickup (final commitment) → Checkout (actual ship) → Requested Delivery → Actual Arrival.</p>
+
+      <h3>3. Operational Review</h3>
+      <p>Coming soon.</p>
+
+      <h2>Measures &mdash; how they are calculated</h2>
+      <table class="measures">
+        <thead>
+          <tr><th style="width:130px;">Measure</th><th>Definition</th><th style="width:240px;">Attributed to</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>SOT 1st</b><br><small>Ship-On-Time vs 1st commit</small></td>
+            <td>
+              % of loads shipped on or before the first committed pickup date.
+              <div class="formula">hit = (checkout_date &le; old_pickup_date)<br>
+              eligible = checkout_date AND old_pickup_date both present</div>
+              <div class="formula">SOT 1st = sum(hit) / sum(eligible) &times; 100</div>
+            </td>
+            <td><code>old_carrier_name</code> &mdash; the carrier who <i>made</i> the first commitment.</td>
+          </tr>
+          <tr>
+            <td><b>SOT Final</b><br><small>Ship-On-Time vs final commit</small></td>
+            <td>
+              % of loads shipped on or before the <i>final</i> committed pickup date.
+              <div class="formula">hit = (checkout_date &le; newest_pickup_date)<br>
+              eligible = checkout_date AND newest_pickup_date both present</div>
+              <div class="formula">SOT Final = sum(hit) / sum(eligible) &times; 100</div>
+            </td>
+            <td><code>newest_carrier_name</code> &mdash; the carrier on the final commitment.</td>
+          </tr>
+          <tr>
+            <td><b>IOT</b><br><small>Inventory On Time</small></td>
+            <td>
+              % of measurable loads where <code>iot_on_time = "Yes"</code>.
+              <div class="formula">hit = (iot_on_time = "Yes")<br>
+              eligible = iot_on_time &isin; ("Yes", "No")</div>
+              <div class="formula">IOT = sum(hit) / sum(eligible) &times; 100</div>
+            </td>
+            <td><code>newest_carrier_name</code> &mdash; the carrier who physically delivered.</td>
+          </tr>
+          <tr>
+            <td><b># Shipments</b></td>
+            <td>Count of loads in the current filter scope.</td>
+            <td>Lane / dataset = load count. Carrier = loads where the carrier was the <i>final</i> carrier (delivered). When the <i>first</i>-commit and <i>final</i>-commit populations differ, the cell is marked with a <code>*</code> and the tooltip shows both counts.</td>
+          </tr>
+          <tr>
+            <td><b># Dropped</b><br><small>(Reassignments panel)</small></td>
+            <td>
+              Count of loads where the old carrier was changed before the load shipped.
+              <div class="formula">drop = (old_carrier_name set AND newest_carrier_name set AND old &ne; new)</div>
+            </td>
+            <td>Always to the <code>old_carrier_name</code> (the carrier who <i>lost</i> the load) and to the <code>lane_pd</code> the load was on.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Why "split attribution" matters</h2>
+      <div class="callout">
+        Whenever Logistics reassigns a load between the first and final commitment, the carrier on the
+        first commitment and the carrier on the final commitment differ. SOT 1st belongs to the first
+        carrier (they made the promise); SOT Final and IOT belong to the final carrier (they kept the
+        promise and delivered). If we attribute all three measures to a single carrier per load, we
+        end up scoring carriers on commitments and outcomes they never owned.
+      </div>
+      <p>Concretely, for any load <i>L</i> and any carrier <i>C</i>:</p>
+      <div class="formula">
+        SOT 1st<sub>C</sub> &nbsp;numerator/denominator runs only over loads where old_carrier_name = C<br>
+        SOT Final<sub>C</sub> &nbsp;numerator/denominator runs only over loads where newest_carrier_name = C<br>
+        IOT<sub>C</sub> &nbsp;&nbsp;&nbsp;&nbsp;numerator/denominator runs only over loads where newest_carrier_name = C
+      </div>
+      <p>
+        Network-level KPIs (the top strip) are unchanged by this. Only the per-carrier breakdown shifts.
+        A no-reassignment subset (loads where <code>old_carrier_name = newest_carrier_name</code>) produces
+        identical numbers under both methodologies &mdash; this is the integrity check.
+      </p>
+
+      <h2>Filters</h2>
+      <ul>
+        <li>Shipping Plant, Destination Plant, Lane (Plant &rarr; Plant), TMS Carrier, Service Type, Destination City, Is Oral Care?, Load Number.</li>
+        <li>All filters are multi-select and search-as-you-type; combining filters AND-narrows the rows.</li>
+        <li>Filters apply across all sections including the Trend Explorer and Reassignments panel.</li>
+      </ul>
+
+      <h2>Trend window</h2>
+      <ul>
+        <li>The "anchor" date is the most recent <code>checkout_date</code> present in the loaded data.</li>
+        <li><b>Past Week</b> = 7 days ending on the anchor. <b>Past Month</b> = 30 days ending on the anchor.</li>
+        <li>Daily series are bucketed by <code>checkout_date</code>.</li>
+      </ul>
+
+      <h2>Reason codes</h2>
+      <p>
+        The reason table on the Trend Explorer counts rows by <code>csot_failure_reason_updated</code>
+        for the selected carrier / lane / service in the chosen window. Empty values show as <code>(blank)</code>.
+      </p>
+
+      <h2>Data freshness</h2>
+      <p>
+        The dataset is fetched once from the Databricks SQL warehouse and pickled locally. The footer of
+        the header shows "Data as of &lt;timestamp&gt;". To refresh, re-run
+        <code>python data_loader.py --refresh</code> and restart the app.
+      </p>
+
+      <h2>Tech stack</h2>
+      <ul>
+        <li>Python + Flask backend (in-memory analytics over ~30k loads).</li>
+        <li>Single-page HTML / Vanilla JS / Chart.js frontend, P&amp;G-branded.</li>
+        <li>Databricks SQL warehouse for source data; local pickle cache for fast restarts.</li>
+      </ul>
     </div>
   </div>
 
@@ -524,6 +726,7 @@ async function refreshAll(){
   await loadPerformance();
   await loadTrendValues();
   await loadTrend();
+  await loadReassignments();
 }
 
 let CARRIER_CARDS = [], LANE_CARDS = [];
@@ -554,10 +757,22 @@ function renderPerfRows(containerId, cards, kind, query){
   if(!rows.length){ box.innerHTML='<div class="muted" style="padding:14px;">No data for selected filters.</div>'; return; }
   box.innerHTML = rows.slice(0,300).map(c=>{
     const name = escapeHtml(c[kind]);
-    return `<div class="perf-row" data-kind="${kind}" data-val="${name}" title="${name}">
+    // For carriers, show split-attribution tooltip when 1st vs Final counts differ
+    let shipDisplay = c.num_shipments.toLocaleString();
+    let rowTitle = name;
+    if(kind === 'carrier' && c.num_first !== undefined && c.num_final !== undefined){
+      const nf = c.num_first || 0, nl = c.num_final || 0;
+      if(nf !== nl){
+        shipDisplay = `${nl.toLocaleString()}<small>*</small>`;
+        rowTitle = `${name}\n${nf.toLocaleString()} loads as 1st carrier (drives SOT 1st)\n${nl.toLocaleString()} loads as final carrier (drives SOT Fnl & IOT)`;
+      } else {
+        rowTitle = `${name}\n${nl.toLocaleString()} loads (same carrier on 1st & final)`;
+      }
+    }
+    return `<div class="perf-row" data-kind="${kind}" data-val="${name}" title="${rowTitle}">
       <div class="nm">${name}</div>
       ${pctCell(c.sot_1st)}${pctCell(c.sot_fnl)}${pctCell(c.iot)}
-      <div class="v ship">${c.num_shipments.toLocaleString()}</div>
+      <div class="v ship">${shipDisplay}</div>
     </div>`;
   }).join('');
   // click a row -> drive the trend explorer
@@ -581,6 +796,50 @@ function renderPerfRows(containerId, cards, kind, query){
 // live search on perf lists
 document.getElementById('carrierSearch').oninput = (e)=> renderPerfRows('carrierRows', CARRIER_CARDS, 'carrier', e.target.value);
 document.getElementById('laneSearch').oninput = (e)=> renderPerfRows('laneRows', LANE_CARDS, 'lane', e.target.value);
+
+// ---------- reassignments / drops ----------
+let REASSIGN_CARRIER = [], REASSIGN_LANE = [];
+async function loadReassignments(){
+  const d = await postJSON('/api/reassignments', {filters: FILTERS});
+  REASSIGN_CARRIER = d.carrier_dropouts || [];
+  REASSIGN_LANE = d.lane_dropouts || [];
+  document.getElementById('reassignCarrierCount').textContent = REASSIGN_CARRIER.length;
+  document.getElementById('reassignLaneCount').textContent = REASSIGN_LANE.length;
+  document.getElementById('reassignSummary').textContent =
+    `${d.total_reassignments.toLocaleString()} of ${d.total_shipments.toLocaleString()} loads (${d.overall_pct}%)`;
+  renderReassignRows('reassignCarrierRows', REASSIGN_CARRIER, 'carrier',
+    document.getElementById('reassignCarrierSearch').value);
+  renderReassignRows('reassignLaneRows', REASSIGN_LANE, 'lane',
+    document.getElementById('reassignLaneSearch').value);
+}
+
+function renderReassignRows(containerId, rows, kind, query){
+  const box = document.getElementById(containerId);
+  query = (query||'').toLowerCase();
+  let data = rows;
+  if(query) data = rows.filter(r=> String(r[kind]).toLowerCase().includes(query));
+  if(!data.length){ box.innerHTML='<div class="muted" style="padding:14px;">No reassignments for selected filters.</div>'; return; }
+  box.innerHTML = data.slice(0, 300).map(r=>{
+    const name = escapeHtml(r[kind]);
+    const denomCount = (kind === 'carrier' ? r.total_first : r.total_loads) || 0;
+    const denomPct = (kind === 'carrier' ? r.drop_rate_own : r.drop_rate_lane);
+    const denomLabel = kind === 'carrier'
+      ? `${name}\n${r.drops.toLocaleString()} of ${denomCount.toLocaleString()} loads they were the 1st carrier on (${denomPct}%)\n${r.pct_of_total}% of all shipments`
+      : `${name}\n${r.drops.toLocaleString()} of ${denomCount.toLocaleString()} loads on this lane (${denomPct}%)\n${r.pct_of_total}% of all shipments`;
+    return `<div class="perf-row reassign-row" title="${denomLabel}">
+      <div class="nm">${name}</div>
+      <div class="v">${r.drops.toLocaleString()}</div>
+      <div class="v ship">${denomCount.toLocaleString()}</div>
+      <div class="v ${denomPct >= 25 ? 'bad' : denomPct >= 10 ? 'mid' : 'good'}">${denomPct}<small>%</small></div>
+      <div class="v ship">${r.pct_of_total}<small>%</small></div>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('reassignCarrierSearch').oninput = (e)=>
+  renderReassignRows('reassignCarrierRows', REASSIGN_CARRIER, 'carrier', e.target.value);
+document.getElementById('reassignLaneSearch').oninput = (e)=>
+  renderReassignRows('reassignLaneRows', REASSIGN_LANE, 'lane', e.target.value);
 
 // ---------- trend ----------
 document.getElementById('trendDim').onchange = async ()=>{

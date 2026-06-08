@@ -146,16 +146,48 @@ def api_performance():
     rows = apply_filters(DATA, filters)
     overall = compute_measures(rows)
 
-    # Carrier performance cards
-    by_carrier = defaultdict(list)
+    # Carrier performance cards — split attribution by measure:
+    #   SOT 1st  -> attributed to old_carrier_name  (they made the 1st commitment)
+    #   SOT Fnl  -> attributed to newest_carrier_name (they made the final commitment)
+    #   IOT      -> attributed to newest_carrier_name (they physically delivered)
+    by_first = defaultdict(list)   # keyed by old_carrier_name
+    by_final = defaultdict(list)   # keyed by newest_carrier_name
     for r in rows:
-        c = r.get('tms_carrier_name') or r.get('carrier_name') or 'UNKNOWN'
-        by_carrier[c].append(r)
+        oc = (r.get('old_carrier_name') or '').strip()
+        nc = (r.get('newest_carrier_name') or '').strip()
+        # Fallback to tms/carrier name if a slot is blank, so a load isn't lost
+        if not nc:
+            nc = (r.get('tms_carrier_name') or r.get('carrier_name') or '').strip()
+        if not oc:
+            oc = nc  # if there was no old carrier, treat as "no reassignment"
+        if oc:
+            by_first[oc].append(r)
+        if nc:
+            by_final[nc].append(r)
+
     cards = []
-    for c, crows in by_carrier.items():
-        m = compute_measures(crows)
-        cards.append({'carrier': c, **m})
-    cards.sort(key=lambda x: x['num_shipments'], reverse=True)
+    for name in set(by_first) | set(by_final):
+        first_rows = by_first.get(name, [])
+        final_rows = by_final.get(name, [])
+        # SOT 1st from first_rows only
+        s1m = sum(r['_sot1_meas'] for r in first_rows)
+        s1h = sum(r['_sot1_hit'] for r in first_rows)
+        # SOT Final + IOT from final_rows only
+        sfm = sum(r['_sotf_meas'] for r in final_rows)
+        sfh = sum(r['_sotf_hit'] for r in final_rows)
+        im = sum(r['_iot_meas'] for r in final_rows)
+        ih = sum(r['_iot_hit'] for r in final_rows)
+        cards.append({
+            'carrier': name,
+            'sot_1st': round(s1h / s1m * 100, 1) if s1m else None,
+            'sot_fnl': round(sfh / sfm * 100, 1) if sfm else None,
+            'iot':     round(ih / im * 100, 1) if im else None,
+            'num_first':     len(first_rows),
+            'num_final':     len(final_rows),
+            'num_shipments': len(final_rows),  # canonical = delivered loads
+        })
+    # Sort by # delivered loads, then by # 1st commitments
+    cards.sort(key=lambda x: (x['num_shipments'], x['num_first']), reverse=True)
 
     # Lane performance cards (lane = shipping_plant -> destination_plant)
     by_lane = defaultdict(list)
@@ -183,43 +215,76 @@ def api_trend():
     """Day-by-day SOT1st / SOTfnl / IOT for a selected dimension value.
     body: { filters, dimension: 'carrier'|'lane'|'service', value: <str>,
             granularity: 'week'|'month' }
+
+    For dimension='carrier' we use split attribution:
+      - SOT 1st line filters on old_carrier_name == value
+      - SOT Final & IOT lines filter on newest_carrier_name == value
     """
     body, filters = _read_filters()
     dimension = body.get('dimension', 'carrier')
     value = body.get('value')
     granularity = body.get('granularity', 'week')
 
-    field = {
-        'carrier': 'tms_carrier_name',
-        'lane': 'lane_pd',
-        'service': 'service_type',
-    }.get(dimension, 'tms_carrier_name')
-
-    rows = apply_filters(DATA, filters)
-    if value and value != '__ALL__':
-        rows = [r for r in rows if (r.get(field) or '') == value]
-
+    base_rows = apply_filters(DATA, filters)
     days, start = _window_dates(granularity)
-    rows = [r for r in rows if r['_checkout'] and r['_checkout'] >= start]
 
-    # Bucket by checkout day
-    buckets = defaultdict(list)
-    for r in rows:
-        buckets[r['_checkout']].append(r)
+    def _windowed(rs):
+        return [r for r in rs if r['_checkout'] and r['_checkout'] >= start]
+
+    # Build the two row sets used by the chart, depending on dimension
+    if dimension == 'carrier':
+        if value and value != '__ALL__':
+            first_rows = [r for r in base_rows if (r.get('old_carrier_name') or '').strip() == value]
+            final_rows = [r for r in base_rows if (r.get('newest_carrier_name') or '').strip() == value]
+        else:
+            first_rows = base_rows
+            final_rows = base_rows
+        # Union for the reasons table and shipment counts
+        union_rows = list({id(r): r for r in (first_rows + final_rows)}.values())
+    else:
+        field = {
+            'lane': 'lane_pd',
+            'service': 'service_type',
+        }.get(dimension, 'lane_pd')
+        rows = base_rows
+        if value and value != '__ALL__':
+            rows = [r for r in rows if (r.get(field) or '') == value]
+        first_rows = rows
+        final_rows = rows
+        union_rows = rows
+
+    first_rows = _windowed(first_rows)
+    final_rows = _windowed(final_rows)
+    union_rows = _windowed(union_rows)
+
+    # Bucket by checkout day for each row set
+    first_by_day = defaultdict(list)
+    for r in first_rows:
+        first_by_day[r['_checkout']].append(r)
+    final_by_day = defaultdict(list)
+    for r in final_rows:
+        final_by_day[r['_checkout']].append(r)
+    union_by_day = defaultdict(list)
+    for r in union_rows:
+        union_by_day[r['_checkout']].append(r)
+
+    def _pct(hit, meas):
+        return round(hit / meas * 100, 1) if meas else None
 
     labels, sot1, sotf, iot, counts = [], [], [], [], []
     for day in days:
-        drows = buckets.get(day, [])
-        m = compute_measures(drows)
+        fr = first_by_day.get(day, [])
+        nr = final_by_day.get(day, [])
+        ur = union_by_day.get(day, [])
+        sot1.append(_pct(sum(r['_sot1_hit'] for r in fr), sum(r['_sot1_meas'] for r in fr)))
+        sotf.append(_pct(sum(r['_sotf_hit'] for r in nr), sum(r['_sotf_meas'] for r in nr)))
+        iot.append(_pct(sum(r['_iot_hit'] for r in nr), sum(r['_iot_meas'] for r in nr)))
+        counts.append(len(ur))
         labels.append(day.isoformat())
-        sot1.append(m['sot_1st'])
-        sotf.append(m['sot_fnl'])
-        iot.append(m['iot'])
-        counts.append(m['num_shipments'])
 
-    # Reason-code breakdown (misses / all) for the selected value
+    # Reason-code breakdown — attribute to the final carrier's rows
     reasons = defaultdict(int)
-    for r in rows:
+    for r in final_rows:
         rc = r.get('csot_failure_reason_updated') or '(blank)'
         reasons[rc] += 1
     reason_rows = sorted(
@@ -240,22 +305,117 @@ def api_trend():
 
 @app.route('/api/dimension_values', methods=['POST'])
 def api_dimension_values():
-    """Distinct values for a dimension (carrier/lane/service), respecting filters."""
+    """Distinct values for a dimension (carrier/lane/service), respecting filters.
+
+    For 'carrier' we union both old_carrier_name and newest_carrier_name so that
+    every carrier who ever owned a load (first or final) shows up. The count is
+    the number of distinct loads where the carrier appeared in either slot.
+    """
     body, filters = _read_filters()
     dimension = body.get('dimension', 'carrier')
-    field = {
-        'carrier': 'tms_carrier_name',
-        'lane': 'lane_pd',
-        'service': 'service_type',
-    }.get(dimension, 'tms_carrier_name')
     rows = apply_filters(DATA, filters)
     counts = defaultdict(int)
-    for r in rows:
-        v = r.get(field)
-        if v not in (None, ''):
-            counts[v] += 1
+    if dimension == 'carrier':
+        for r in rows:
+            seen = set()
+            for f in ('old_carrier_name', 'newest_carrier_name'):
+                v = (r.get(f) or '').strip()
+                if v and v not in seen:
+                    counts[v] += 1
+                    seen.add(v)
+    else:
+        field = {
+            'lane': 'lane_pd',
+            'service': 'service_type',
+        }.get(dimension, 'lane_pd')
+        for r in rows:
+            v = r.get(field)
+            if v not in (None, ''):
+                counts[v] += 1
     vals = sorted(counts.items(), key=lambda x: x[1], reverse=True)
     return jsonify([{'value': v, 'count': c} for v, c in vals])
+
+
+@app.route('/api/reassignments', methods=['POST'])
+def api_reassignments():
+    """Carrier reassignment / "drop" analysis.
+
+    A reassignment / drop is any load where old_carrier_name is set, newest_carrier_name
+    is set, and they differ. We report it from the *old* (dropping) carrier's perspective.
+
+    Returns:
+      - total_shipments: # loads after filters
+      - total_reassignments: # loads where old != new
+      - overall_pct: total_reassignments / total_shipments * 100
+      - carrier_dropouts: per old_carrier_name
+            drops          = loads where this carrier was the old carrier and was changed off
+            total_first    = loads where this carrier was the old carrier (denominator)
+            drop_rate_own  = drops / total_first * 100   (the carrier's own drop rate)
+            pct_of_total   = drops / total_shipments * 100
+      - lane_dropouts: per lane_pd
+            drops          = loads on this lane where carrier was changed
+            total_loads    = loads on this lane (denominator)
+            drop_rate_lane = drops / total_loads * 100
+            pct_of_total   = drops / total_shipments * 100
+    """
+    _body, filters = _read_filters()
+    rows = apply_filters(DATA, filters)
+    total = len(rows)
+
+    car_drops = defaultdict(int)
+    car_first = defaultdict(int)
+    lane_drops = defaultdict(int)
+    lane_total = defaultdict(int)
+    reassign_total = 0
+
+    for r in rows:
+        oc = (r.get('old_carrier_name') or '').strip()
+        nc = (r.get('newest_carrier_name') or '').strip()
+        lane = r.get('lane_pd') or '(unknown)'
+
+        if oc:
+            car_first[oc] += 1
+        lane_total[lane] += 1
+
+        if oc and nc and oc != nc:
+            car_drops[oc] += 1
+            lane_drops[lane] += 1
+            reassign_total += 1
+
+    def _pct(num, den):
+        return round(num / den * 100, 2) if den else 0.0
+
+    carrier_rows = []
+    for c, drops in car_drops.items():
+        first = car_first.get(c, 0)
+        carrier_rows.append({
+            'carrier': c,
+            'drops': drops,
+            'total_first': first,
+            'drop_rate_own': _pct(drops, first),
+            'pct_of_total': _pct(drops, total),
+        })
+    carrier_rows.sort(key=lambda x: x['drops'], reverse=True)
+
+    lane_rows = []
+    for lk, drops in lane_drops.items():
+        tot = lane_total.get(lk, 0)
+        lane_rows.append({
+            'lane': lk,
+            'drops': drops,
+            'total_loads': tot,
+            'drop_rate_lane': _pct(drops, tot),
+            'pct_of_total': _pct(drops, total),
+        })
+    lane_rows.sort(key=lambda x: x['drops'], reverse=True)
+
+    return jsonify({
+        'total_shipments': total,
+        'total_reassignments': reassign_total,
+        'overall_pct': _pct(reassign_total, total),
+        'carrier_dropouts': carrier_rows,
+        'lane_dropouts': lane_rows,
+    })
 
 
 @app.route('/api/orders', methods=['POST'])
