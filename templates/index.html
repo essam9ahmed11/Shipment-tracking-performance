@@ -208,11 +208,15 @@
   .timeline-row .info { font-size:11px; }
   .timeline-row .info .ln { font-weight:700; color:var(--pg-blue-dark); }
   .timeline-row .info .sub { color:var(--gray); }
-  .tl { position:relative; height:42px; }
-  .tl .track { position:absolute; left:0; right:0; top:20px; height:2px; background:var(--line); }
-  .tl .pt { position:absolute; transform:translateX(-50%); top:9px; }
+  .tl { position:relative; height:48px; }
+  .tl .track { position:absolute; left:0; right:0; top:22px; height:2px; background:var(--line); }
+  .tl .pt { position:absolute; transform:translateX(-50%); top:10px; }
   .tl .pt .dot { width:13px; height:13px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.15); margin:0 auto; }
-  .tl .pt .lbl { font-size:8.5px; color:var(--gray); white-space:nowrap; margin-top:2px; text-align:center; transform:translateX(-50%); position:relative; left:50%; }
+  .tl .pt .pin-group { display:flex; gap:1px; justify-content:center; align-items:center; padding:1px 2px; background:#fff; border-radius:3px; box-shadow:0 0 0 1px rgba(0,0,0,.08); }
+  .tl .pt .pin { width:7px; height:18px; border-radius:2px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.35); display:inline-block; }
+  .tl .pt.cluster .pin-group { box-shadow:0 0 0 1px rgba(0,82,155,.35); }
+  .tl .pt .lbl { font-size:8.5px; color:var(--gray); white-space:nowrap; margin-top:3px; text-align:center; }
+  .tl .pt .lbl b { color:var(--pg-blue-dark); }
   .muted { color: var(--gray); font-size: 13px; }
   .loading { text-align:center; color:var(--gray); padding:30px; }
   .coming { text-align:center; padding:80px 20px; color:var(--gray); }
@@ -914,15 +918,27 @@ async function loadOrders(){
 }
 
 function renderTimeline(orders, container){
-  // Determine global min/max date across milestones to scale
+  // Render every milestone, even when several share a date, by clustering overlapping pins
+  // side-by-side. Each pin keeps its own color so all attribution stays visible on one line.
   const points = ['old_pickup_date','newest_pickup_date','checkout_date','requested_delivery_date','actual_arrival_date'];
+  const labels = {old_pickup_date:'Old PU (1st commit)', newest_pickup_date:'New PU (final commit)', checkout_date:'Checkout (actual ship)', requested_delivery_date:'Requested Delivery', actual_arrival_date:'Actual Arrival'};
+  const shortLabels = {old_pickup_date:'OldPU', newest_pickup_date:'NewPU', checkout_date:'CKO', requested_delivery_date:'ReqDel', actual_arrival_date:'Arr'};
   const colors = {old_pickup_date:'#9aa5b1', newest_pickup_date:'#00529b', checkout_date:'#0a8a3c', requested_delivery_date:'#f5a623', actual_arrival_date:'#c8102e'};
+  const OVERLAP_PCT = 3; // pins whose centers are within 3% of axis are clustered side-by-side
   container.innerHTML='';
   orders.forEach(o=>{
-    const ds = points.map(p=>o[p]).filter(Boolean).map(s=>new Date(s).getTime());
-    if(!ds.length) return;
-    const min = Math.min(...ds), max=Math.max(...ds);
+    const milestones = points
+      .filter(p => o[p])
+      .map(p => ({ key:p, label:labels[p], short:shortLabels[p], color:colors[p], date:o[p], t:new Date(o[p]).getTime() }));
+    if(!milestones.length) return;
+    const min = Math.min(...milestones.map(m=>m.t));
+    const max = Math.max(...milestones.map(m=>m.t));
     const span = (max-min)||1;
+    milestones.forEach(m => { m.x = (max===min) ? 50 : ((m.t-min)/span)*100; });
+    // sort by x then by canonical event order so pin colors render in a stable left-to-right order
+    const order = {old_pickup_date:0, newest_pickup_date:1, checkout_date:2, requested_delivery_date:3, actual_arrival_date:4};
+    milestones.sort((a,b)=> (a.x - b.x) || (order[a.key]-order[b.key]));
+
     const row = el('div','timeline-row');
     row.innerHTML = `<div class="info">
       <div class="ln">${escapeHtml(o.load_number)} · ${escapeHtml(o.order_number||'—')}</div>
@@ -930,15 +946,37 @@ function renderTimeline(orders, container){
       <div class="sub">${escapeHtml(o.lane||'')}</div>
       <div class="sub">IOT: <b style="color:${o.iot_on_time==='Yes'?'#0a8a3c':'#c8102e'}">${o.iot_on_time||'—'}</b></div>
     </div>`;
-    const tl = el('div','tl'); tl.innerHTML = '<div class="track"></div>';
-    points.forEach(p=>{
-      if(!o[p]) return;
-      const t = new Date(o[p]).getTime();
-      const x = ((t-min)/span)*100;
-      const pt = el('div','pt'); pt.style.left = x+'%';
-      pt.innerHTML = `<div class="dot" style="background:${colors[p]}" title="${p}: ${o[p]}"></div>
-        <div class="lbl">${o[p].slice(5)}</div>`;
-      tl.appendChild(pt);
+    const tl = el('div','tl');
+    tl.innerHTML = '<div class="track"></div>';
+    // Greedy clustering on axis position
+    const clusters = [];
+    milestones.forEach(m => {
+      const last = clusters[clusters.length-1];
+      if(last && (m.x - last.center) <= OVERLAP_PCT){
+        last.items.push(m);
+        last.center = last.items.reduce((a,b)=>a+b.x,0)/last.items.length;
+      } else {
+        clusters.push({ center:m.x, items:[m] });
+      }
+    });
+    clusters.forEach(c => {
+      const grp = el('div', 'pt' + (c.items.length>1 ? ' cluster' : ''));
+      grp.style.left = c.center+'%';
+      const pinsHTML = c.items.map(m =>
+        `<span class="pin" style="background:${m.color}" title="${escapeHtml(m.label)}: ${escapeHtml(m.date)}"></span>`
+      ).join('');
+      // Label: show date(s) actually present; collapse identical dates to one entry
+      const uniqDates = [];
+      c.items.forEach(m => { if(!uniqDates.includes(m.date)) uniqDates.push(m.date); });
+      const lblText = uniqDates.length === 1
+        ? uniqDates[0].slice(5)
+        : uniqDates.map(d => d.slice(5)).join(' / ');
+      // Build a multi-line tooltip listing every milestone in the cluster
+      const fullTitle = c.items.map(m => `${m.label}: ${m.date}`).join('\n');
+      grp.setAttribute('title', fullTitle);
+      grp.innerHTML = `<div class="pin-group">${pinsHTML}</div>
+        <div class="lbl">${escapeHtml(lblText)}</div>`;
+      tl.appendChild(grp);
     });
     row.appendChild(tl);
     container.appendChild(row);
