@@ -49,6 +49,25 @@ for r in ROWS:
     d['_sot1_hit'] = 1 if (co and op and co <= op) else 0
     d['_sotf_meas'] = 1 if (co and np_) else 0
     d['_sotf_hit'] = 1 if (co and np_ and co <= np_) else 0
+    # SAP actual goods issue (true ship date from likp.wadat_ist) and arrival
+    gi = _parse_date(d.get('sap_actual_gi_date'))
+    ar = _parse_date(d.get('actual_arrival_date'))
+    lr = _parse_date(d.get('load_ready_date'))
+    lc = _parse_date(d.get('load_complete_date'))
+    d['_sap_gi'] = gi
+    d['_arrival'] = ar
+    # checkout vs SAP GI gap (days); positive = checkout later than SAP GI
+    d['_gi_gap'] = (co - gi).days if (co and gi) else None
+    # Anomaly flags (date-only, only when both sides present)
+    d['_an_arr_before_cko'] = 1 if (ar and co and ar < co) else 0          # arrived before it shipped
+    d['_an_cko_before_pickup'] = 1 if (co and op and co < op) else 0       # shipped before 1st commit
+    d['_an_cko_before_ready'] = 1 if (co and lr and co < lr) else 0        # shipped before load ready
+    d['_an_arr_before_finalpickup'] = 1 if (ar and np_ and ar < np_) else 0  # arrived before final pickup
+    d['_an_cko_ne_gi'] = 1 if (co and gi and co != gi) else 0             # checkout != SAP GI (date)
+    # Does SAP GI "resolve" the arrival<checkout case? (GI on/before arrival)
+    d['_an_arr_resolved_by_gi'] = 1 if (d['_an_arr_before_cko'] and gi and ar and gi <= ar) else 0
+    d['_anomaly'] = 1 if (d['_an_arr_before_cko'] or d['_an_cko_before_pickup']
+                          or d['_an_cko_before_ready'] or d['_an_arr_before_finalpickup']) else 0
     # normalize carrier short name (had tabs)
     if d.get('carrier_short_name'):
         d['carrier_short_name'] = d['carrier_short_name'].strip()
@@ -440,12 +459,115 @@ def api_orders():
             'newest_pickup_date': r.get('newest_pickup_date'),
             'newest_pickup_time': r.get('newest_pickup_time'),
             'checkout_date': r.get('checkout_date'),
+            'sap_actual_gi_date': r.get('sap_actual_gi_date'),
             'requested_delivery_date': r.get('requested_delivery_date_from'),
             'actual_arrival_date': r.get('actual_arrival_date'),
             'iot_on_time': r.get('iot_on_time'),
             'reason': r.get('csot_failure_reason_updated'),
+            'anomaly': r.get('_anomaly'),
+            'gi_gap': r.get('_gi_gap'),
         })
     return jsonify({'orders': out, 'total': len(rows)})
+
+
+# Human-readable anomaly definitions used by /api/anomalies
+ANOMALY_CLASSES = [
+    ('arr_before_cko', '_an_arr_before_cko',
+     'Arrived before it shipped', 'actual_arrival_date < checkout_date'),
+    ('cko_before_pickup', '_an_cko_before_pickup',
+     'Shipped before 1st pickup commit', 'checkout_date < old_pickup_date'),
+    ('cko_before_ready', '_an_cko_before_ready',
+     'Shipped before load ready', 'checkout_date < load_ready_date'),
+    ('arr_before_finalpickup', '_an_arr_before_finalpickup',
+     'Arrived before final pickup', 'actual_arrival_date < newest_pickup_date'),
+    ('cko_ne_gi', '_an_cko_ne_gi',
+     'Checkout date \u2260 SAP actual GI', 'checkout_date <> sap_actual_gi_date'),
+]
+
+
+@app.route('/api/anomalies', methods=['POST'])
+def api_anomalies():
+    """Logical date anomalies, each cross-checked against SAP actual GI."""
+    body, filters = _read_filters()
+    rows = apply_filters(DATA, filters)
+    total = len(rows)
+
+    # Class summary
+    summary = []
+    for key, flag, label, logic in ANOMALY_CLASSES:
+        hits = [r for r in rows if r.get(flag)]
+        n = len(hits)
+        # How many of these are resolved if we trust SAP GI instead of checkout?
+        # (i.e. SAP GI date would remove the contradiction)
+        resolved = 0
+        for r in hits:
+            gi = r.get('_sap_gi')
+            if not gi:
+                continue
+            ar = r.get('_arrival'); op = r.get('_old_pickup')
+            if key == 'arr_before_cko' and ar and gi <= ar:
+                resolved += 1
+            elif key == 'cko_before_pickup' and op and gi >= op:
+                resolved += 1
+            elif key == 'cko_ne_gi':
+                resolved += 1  # by definition SAP GI is the alternate value
+        summary.append({
+            'key': key, 'label': label, 'logic': logic, 'count': n,
+            'pct': round(n / total * 100, 2) if total else 0,
+            'sap_resolved': resolved,
+            'sap_resolved_pct': round(resolved / n * 100, 1) if n else 0,
+        })
+
+    # Which class to list rows for (default: the arrival-before-checkout class)
+    want = body.get('anomaly_class') or 'arr_before_cko'
+    flag = dict((k, f) for k, f, _l, _lg in ANOMALY_CLASSES).get(want, '_an_arr_before_cko')
+    listed = [r for r in rows if r.get(flag)]
+    # Sort by the size of the contradiction (largest gap first)
+    def _gap(r):
+        co = r.get('_checkout'); ar = r.get('_arrival')
+        op = r.get('_old_pickup'); lr = _parse_date(r.get('load_ready_date'))
+        np_ = r.get('_new_pickup')
+        if want == 'arr_before_cko' and co and ar:
+            return (co - ar).days
+        if want == 'cko_before_pickup' and op and co:
+            return (op - co).days
+        if want == 'cko_before_ready' and lr and co:
+            return (lr - co).days
+        if want == 'arr_before_finalpickup' and np_ and ar:
+            return (np_ - ar).days
+        if want == 'cko_ne_gi' and co and r.get('_sap_gi'):
+            return abs((co - r['_sap_gi']).days)
+        return 0
+    listed.sort(key=_gap, reverse=True)
+
+    detail = []
+    for r in listed[:200]:
+        detail.append({
+            'load_number': r.get('load_number'),
+            'order_number': r.get('order_number'),
+            'lane': r.get('lane_pd'),
+            'carrier': (r.get('newest_carrier_name') or r.get('tms_carrier_name')
+                        or r.get('carrier_name')),
+            'old_pickup_date': r.get('old_pickup_date'),
+            'newest_pickup_date': r.get('newest_pickup_date'),
+            'load_ready_date': r.get('load_ready_date'),
+            'load_complete_date': r.get('load_complete_date'),
+            'checkout_date': r.get('checkout_date'),
+            'requested_delivery_date': r.get('requested_delivery_date'),
+            'actual_arrival_date': r.get('actual_arrival_date'),
+            'sap_actual_gi_date': r.get('sap_actual_gi_date'),
+            'gap_days': _gap(r),
+            'sap_resolves': bool(r.get('_an_arr_resolved_by_gi')) if want == 'arr_before_cko' else None,
+        })
+
+    return jsonify({
+        'total_shipments': total,
+        'classes': summary,
+        'listed_class': want,
+        'detail': detail,
+        'detail_truncated': len(listed) > 200,
+        'detail_total': len(listed),
+    })
 
 
 if __name__ == '__main__':

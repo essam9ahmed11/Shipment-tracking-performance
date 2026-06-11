@@ -208,6 +208,25 @@
   .timeline-row .info { font-size:11px; }
   .timeline-row .info .ln { font-weight:700; color:var(--pg-blue-dark); }
   .timeline-row .info .sub { color:var(--gray); }
+  .timeline-row.has-anom { background:rgba(245,166,35,.06); }
+  .anom-badge { display:inline-block; background:#fff4e0; color:#a85b00; border:1px solid #f5a623; border-radius:8px; padding:0 5px; font-size:9px; font-weight:700; margin-left:4px; cursor:help; vertical-align:middle; }
+  .anom-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  .anom-card { border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer; transition:.15s; background:#fff; }
+  .anom-card:hover { box-shadow:0 2px 10px rgba(0,0,0,.08); border-color:#c8102e; }
+  .anom-card.active { border-color:#c8102e; box-shadow:0 0 0 2px rgba(200,16,46,.15); }
+  .anom-card .ac-label { font-size:11.5px; font-weight:700; color:var(--pg-blue-dark); min-height:30px; }
+  .anom-card .ac-count { font-size:26px; font-weight:800; color:#c8102e; line-height:1.1; margin:4px 0 2px; }
+  .anom-card .ac-pct { font-size:11px; color:var(--gray); }
+  .anom-card .ac-sap { font-size:10.5px; color:#0a8a3c; margin-top:6px; }
+  .anom-card .ac-logic { font-size:9.5px; color:var(--gray); margin-top:6px; font-family:monospace; }
+  .table-wrap { overflow-x:auto; }
+  .anom-table { width:100%; border-collapse:collapse; font-size:11px; }
+  .anom-table th { text-align:left; padding:6px 8px; border-bottom:2px solid var(--line); color:var(--gray); white-space:nowrap; position:sticky; top:0; background:#fff; }
+  .anom-table td { padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .anom-table tr:hover td { background:#fafbfc; }
+  .anom-table .yes { color:#0a8a3c; font-weight:700; }
+  .anom-table .no { color:#c8102e; font-weight:700; }
+  .anom-table .gi { color:#7b2cbf; font-weight:600; }
   .tl { position:relative; height:48px; }
   .tl .track { position:absolute; left:0; right:0; top:22px; height:2px; background:var(--line); }
   .tl .pt { position:absolute; transform:translateX(-50%); top:10px; }
@@ -401,6 +420,7 @@
         <span><i style="background:#9aa5b1;"></i> Old Pickup (1st commit)</span>
         <span><i style="background:#00529b;"></i> New Pickup (final commit)</span>
         <span><i style="background:#0a8a3c;"></i> Checkout (actual ship)</span>
+        <span><i style="background:#7b2cbf;"></i> SAP Actual GI</span>
         <span><i style="background:#f5a623;"></i> Requested Delivery</span>
         <span><i style="background:#c8102e;"></i> Actual Arrival</span>
       </div>
@@ -410,10 +430,31 @@
 
   <!-- ================= OPERATIONAL REVIEW ================= -->
   <div class="panel" id="panel-ops">
-    <div class="coming">
-      <div class="big">🚧</div>
-      <h2 style="color:var(--pg-blue-dark);">Operational Review</h2>
-      <p>Coming soon.</p>
+    <div class="filters" id="opsFilters"></div>
+    <div class="section">
+      <h2>Data Quality &amp; Date Anomalies <span class="pill" id="anomTotal"></span></h2>
+      <p class="muted" style="margin:-4px 0 12px;">
+        Loads whose milestone dates contradict each other, cross-checked against the
+        authoritative <b>SAP Actual GI</b> date (<code>likp.wadat_ist</code>) joined at load grain.
+      </p>
+      <div class="anom-cards" id="anomCards"><div class="loading"><span class="spin"></span> Loading…</div></div>
+      <div class="anom-detail">
+        <h3 id="anomDetailTitle" style="color:var(--pg-blue-dark);margin:18px 0 8px;">Flagged loads</h3>
+        <div class="muted" id="anomDetailMeta" style="margin-bottom:8px;"></div>
+        <div class="table-wrap">
+          <table class="anom-table" id="anomTable">
+            <thead>
+              <tr>
+                <th>Load</th><th>Order</th><th>Lane</th><th>Carrier</th>
+                <th>Old PU</th><th>New PU</th><th>Checkout</th>
+                <th>SAP GI</th><th>Req. Del</th><th>Arrival</th>
+                <th>Gap (d)</th><th>SAP resolves?</th>
+              </tr>
+            </thead>
+            <tbody id="anomRows"><tr><td colspan="12" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -443,10 +484,16 @@
       </ul>
 
       <h3>2. Order Analysis</h3>
-      <p>Per-load timeline: Old Pickup (1st commitment) → New Pickup (final commitment) → Checkout (actual ship) → Requested Delivery → Actual Arrival.</p>
+      <p>Per-load timeline: Old Pickup (1st commitment) → New Pickup (final commitment) → Checkout (actual ship) → <b>SAP Actual GI</b> → Requested Delivery → Actual Arrival. Loads whose dates contradict each other are flagged with a ⚠ badge.</p>
 
       <h3>3. Operational Review</h3>
-      <p>Coming soon.</p>
+      <p>
+        <b>Data Quality &amp; Date Anomalies.</b> Surfaces loads whose milestone dates are internally
+        inconsistent (e.g. arrived before it shipped, shipped before its pickup commitment) and
+        cross-checks each against the authoritative <b>SAP Actual Goods-Issue</b> date
+        (<code>cdl_oss_prod.silver_sap_n6p.likp.wadat_ist</code>), joined to the load via the SAP
+        delivery number. The "SAP resolves?" flag shows whether the SAP GI date corrects the contradiction.
+      </p>
 
       <h2>Measures &mdash; how they are calculated</h2>
       <table class="measures">
@@ -578,6 +625,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     t.classList.add('active');
     document.getElementById('panel-'+t.dataset.tab).classList.add('active');
     if(t.dataset.tab==='orders') loadOrders();
+    if(t.dataset.tab==='ops') loadAnomalies();
   };
 });
 
@@ -585,12 +633,13 @@ document.querySelectorAll('.tab').forEach(t=>{
 const FILTER_FIELDS = ['shipping_plant','destination_plant','lane_pd','tms_carrier_name','service_type','destination_city','is_oral_care','load_number'];
 
 // selected values per container+field: SELS[containerId][field] = Set
-const SELS = { perfFilters:{}, orderFilters:{} };
+const SELS = { perfFilters:{}, orderFilters:{}, opsFilters:{} };
 
 async function initFilters(){
   FILTER_META = await (await fetch('/api/filters')).json();
   buildFilterUI('perfFilters');
   buildFilterUI('orderFilters');
+  buildFilterUI('opsFilters');
 }
 
 function buildFilterUI(containerId){
@@ -612,12 +661,17 @@ function buildFilterUI(containerId){
 
   const actions = el('div','filter-actions');
   const apply = el('button','btn','Apply Filters');
-  apply.onclick = ()=> (containerId==='perfFilters' ? refreshAll() : loadOrders());
+  const runFor = ()=>{
+    if(containerId==='perfFilters') refreshAll();
+    else if(containerId==='opsFilters') loadAnomalies();
+    else loadOrders();
+  };
+  apply.onclick = runFor;
   const reset = el('button','btn ghost','Reset');
   reset.onclick = ()=>{
     Object.values(SELS[containerId]).forEach(s=>s.clear());
     c.querySelectorAll('.ms').forEach(ms=>updateMsButton(ms));
-    (containerId==='perfFilters' ? refreshAll() : loadOrders());
+    runFor();
   };
   actions.appendChild(apply); actions.appendChild(reset);
   c.appendChild(actions);
@@ -920,10 +974,10 @@ async function loadOrders(){
 function renderTimeline(orders, container){
   // Render every milestone, even when several share a date, by clustering overlapping pins
   // side-by-side. Each pin keeps its own color so all attribution stays visible on one line.
-  const points = ['old_pickup_date','newest_pickup_date','checkout_date','requested_delivery_date','actual_arrival_date'];
-  const labels = {old_pickup_date:'Old PU (1st commit)', newest_pickup_date:'New PU (final commit)', checkout_date:'Checkout (actual ship)', requested_delivery_date:'Requested Delivery', actual_arrival_date:'Actual Arrival'};
-  const shortLabels = {old_pickup_date:'OldPU', newest_pickup_date:'NewPU', checkout_date:'CKO', requested_delivery_date:'ReqDel', actual_arrival_date:'Arr'};
-  const colors = {old_pickup_date:'#9aa5b1', newest_pickup_date:'#00529b', checkout_date:'#0a8a3c', requested_delivery_date:'#f5a623', actual_arrival_date:'#c8102e'};
+  const points = ['old_pickup_date','newest_pickup_date','checkout_date','sap_actual_gi_date','requested_delivery_date','actual_arrival_date'];
+  const labels = {old_pickup_date:'Old PU (1st commit)', newest_pickup_date:'New PU (final commit)', checkout_date:'Checkout (actual ship)', sap_actual_gi_date:'SAP Actual GI', requested_delivery_date:'Requested Delivery', actual_arrival_date:'Actual Arrival'};
+  const shortLabels = {old_pickup_date:'OldPU', newest_pickup_date:'NewPU', checkout_date:'CKO', sap_actual_gi_date:'SAP GI', requested_delivery_date:'ReqDel', actual_arrival_date:'Arr'};
+  const colors = {old_pickup_date:'#9aa5b1', newest_pickup_date:'#00529b', checkout_date:'#0a8a3c', sap_actual_gi_date:'#7b2cbf', requested_delivery_date:'#f5a623', actual_arrival_date:'#c8102e'};
   const OVERLAP_PCT = 3; // pins whose centers are within 3% of axis are clustered side-by-side
   container.innerHTML='';
   orders.forEach(o=>{
@@ -936,12 +990,23 @@ function renderTimeline(orders, container){
     const span = (max-min)||1;
     milestones.forEach(m => { m.x = (max===min) ? 50 : ((m.t-min)/span)*100; });
     // sort by x then by canonical event order so pin colors render in a stable left-to-right order
-    const order = {old_pickup_date:0, newest_pickup_date:1, checkout_date:2, requested_delivery_date:3, actual_arrival_date:4};
+    const order = {old_pickup_date:0, newest_pickup_date:1, checkout_date:2, sap_actual_gi_date:3, requested_delivery_date:4, actual_arrival_date:5};
     milestones.sort((a,b)=> (a.x - b.x) || (order[a.key]-order[b.key]));
 
-    const row = el('div','timeline-row');
+    // Build anomaly notes for this load (checkout vs SAP GI, arrival before checkout)
+    const notes = [];
+    if(o.checkout_date && o.actual_arrival_date && o.actual_arrival_date < o.checkout_date)
+      notes.push('Arrived ('+o.actual_arrival_date.slice(5)+') before checkout ('+o.checkout_date.slice(5)+')');
+    if(o.checkout_date && o.sap_actual_gi_date && o.checkout_date !== o.sap_actual_gi_date){
+      const g = o.gi_gap;
+      notes.push('Checkout ≠ SAP GI ('+o.sap_actual_gi_date.slice(5)+(g!=null?', '+(g>0?'+':'')+g+'d':'')+')');
+    }
+    const badge = notes.length
+      ? `<span class="anom-badge" title="${escapeHtml(notes.join('\n'))}">⚠ ${notes.length}</span>` : '';
+
+    const row = el('div','timeline-row' + (notes.length ? ' has-anom' : ''));
     row.innerHTML = `<div class="info">
-      <div class="ln">${escapeHtml(o.load_number)} · ${escapeHtml(o.order_number||'—')}</div>
+      <div class="ln">${escapeHtml(o.load_number)} · ${escapeHtml(o.order_number||'—')} ${badge}</div>
       <div class="sub">${escapeHtml(o.carrier||'—')} · ${escapeHtml(o.service_type||'')}</div>
       <div class="sub">${escapeHtml(o.lane||'')}</div>
       <div class="sub">IOT: <b style="color:${o.iot_on_time==='Yes'?'#0a8a3c':'#c8102e'}">${o.iot_on_time||'—'}</b></div>
@@ -981,6 +1046,62 @@ function renderTimeline(orders, container){
     row.appendChild(tl);
     container.appendChild(row);
   });
+}
+
+// ---------- data quality / anomalies ----------
+let ANOM_CLASS = 'arr_before_cko';
+
+async function loadAnomalies(){
+  const f = collectFilters('opsFilters');
+  const cards = document.getElementById('anomCards');
+  const rows = document.getElementById('anomRows');
+  cards.innerHTML = '<div class="loading"><span class="spin"></span> Loading…</div>';
+  rows.innerHTML = '<tr><td colspan="12" class="muted">Loading…</td></tr>';
+  const d = await postJSON('/api/anomalies', {filters: f, anomaly_class: ANOM_CLASS});
+  document.getElementById('anomTotal').textContent = d.total_shipments.toLocaleString()+' loads';
+
+  // ensure the selected class is one that exists; else fall back to first
+  if(!d.classes.some(c=>c.key===ANOM_CLASS) && d.classes.length){ ANOM_CLASS = d.classes[0].key; }
+
+  cards.innerHTML = d.classes.map(c=>`
+    <div class="anom-card ${c.key===ANOM_CLASS?'active':''}" data-class="${c.key}">
+      <div class="ac-label">${escapeHtml(c.label)}</div>
+      <div class="ac-count">${c.count.toLocaleString()}</div>
+      <div class="ac-pct">${c.pct}% of all loads</div>
+      <div class="ac-sap">SAP GI resolves ${c.sap_resolved.toLocaleString()} (${c.sap_resolved_pct}%)</div>
+      <div class="ac-logic">${escapeHtml(c.logic)}</div>
+    </div>`).join('');
+  cards.querySelectorAll('.anom-card').forEach(card=>{
+    card.onclick = ()=>{ ANOM_CLASS = card.dataset.class; loadAnomalies(); };
+  });
+
+  const sel = d.classes.find(c=>c.key===d.listed_class) || d.classes.find(c=>c.key===ANOM_CLASS);
+  document.getElementById('anomDetailTitle').textContent =
+    'Flagged loads — ' + (sel ? sel.label : '');
+  document.getElementById('anomDetailMeta').textContent = d.detail_truncated
+    ? `Showing top ${d.detail.length} of ${d.detail_total.toLocaleString()} (sorted by largest contradiction).`
+    : `Showing all ${d.detail_total.toLocaleString()}.`;
+
+  const dash = v => v ? escapeHtml(String(v).slice(5)) : '<span class="muted">—</span>';
+  rows.innerHTML = d.detail.map(r=>{
+    const res = r.sap_resolves===true ? '<span class="yes">Yes</span>'
+      : r.sap_resolves===false ? '<span class="no">No</span>'
+      : '<span class="muted">n/a</span>';
+    return `<tr>
+      <td>${escapeHtml(r.load_number||'—')}</td>
+      <td>${escapeHtml(r.order_number||'—')}</td>
+      <td>${escapeHtml(r.lane||'—')}</td>
+      <td>${escapeHtml(r.carrier||'—')}</td>
+      <td>${dash(r.old_pickup_date)}</td>
+      <td>${dash(r.newest_pickup_date)}</td>
+      <td>${dash(r.checkout_date)}</td>
+      <td class="gi">${dash(r.sap_actual_gi_date)}</td>
+      <td>${dash(r.requested_delivery_date)}</td>
+      <td>${dash(r.actual_arrival_date)}</td>
+      <td>${r.gap_days!=null?r.gap_days:'—'}</td>
+      <td>${res}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="12" class="muted">No loads in this class for the current filters.</td></tr>';
 }
 
 // ---------- init ----------

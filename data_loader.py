@@ -25,6 +25,7 @@ COLUMNS = [
     'newest_carrier_name', 'newest_pickup_date', 'newest_pickup_time',
     'latest_change_date', 'change_user',
     'sap_original_ship_date',
+    'load_ready_date', 'load_complete_date',
     'checkout_date', 'actual_arrival_date',
     'requested_delivery_date_from', 'requested_delivery_date_to',
     'iot_on_time', 'csot_failure_reason_updated', 'csot_failure_reason',
@@ -44,11 +45,35 @@ def _headers():
 
 
 def _fetch_all():
-    """Run the SELECT and follow result chunks to get every row."""
+    """Run the SELECT and follow result chunks to get every row.
+
+    Adds `sap_actual_gi_date` per load via the proper load->delivery->GI link:
+      OCNA.load_number = na_tms_loads_cdl.load_id
+      na_tms_loads_cdl.shipment_tracking_number = likp.vbeln (SAP delivery)
+      likp.wadat_ist = actual goods issue (the true SAP ship date)
+    """
     headers, base = _headers()
     url = base + '/api/2.0/sql/statements'
-    col_list = ', '.join(COLUMNS)
-    q = f'SELECT {col_list} FROM {TABLE}'
+    col_list = ', '.join('t.' + c for c in COLUMNS)
+    q = f'''
+WITH link AS (
+  SELECT CAST(load_id AS STRING) AS load_id,
+         MAX(CAST(shipment_tracking_number AS STRING)) AS vbeln
+  FROM hive_metastore.userdb_essam_ae.na_tms_loads_cdl
+  WHERE shipment_tracking_number IS NOT NULL
+  GROUP BY CAST(load_id AS STRING)
+),
+gi AS (
+  SELECT CAST(vbeln AS STRING) AS vbeln, TO_DATE(wadat_ist, 'yyyyMMdd') AS sap_gi
+  FROM cdl_oss_prod.silver_sap_n6p.likp
+  WHERE wadat_ist IS NOT NULL AND wadat_ist <> '00000000'
+)
+SELECT {col_list},
+       CAST(g.sap_gi AS STRING) AS sap_actual_gi_date
+FROM {TABLE} t
+LEFT JOIN link l ON l.load_id = CAST(t.load_number AS STRING)
+LEFT JOIN gi   g ON g.vbeln   = l.vbeln
+'''
     r = requests.post(url, headers=headers, json={
         'warehouse_id': WAREHOUSE_ID,
         'statement': q,
