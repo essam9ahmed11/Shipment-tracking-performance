@@ -18,7 +18,7 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 TABLE = "hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders"
 WAREHOUSE_ID = "2627fd4c01a8c5a2"
-OUT_XLSX = os.path.join(HERE, "operational_not_shipped_orders_interplant_oralcare.xlsx")
+OUT_XLSX = os.path.join(HERE, "operational_not_shipped_orders_interplant_oralcare_gi.xlsx")
 
 
 def _env():
@@ -93,7 +93,7 @@ def main():
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
     date_cols = ["first_commitment_pickup_date", "latest_commitment_pickup_date",
-                 "planned_gi_date", "requested_delivery_date"]
+                 "planned_gi_date", "actual_gi_date", "requested_delivery_date"]
     for c in date_cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
@@ -127,7 +127,7 @@ def main():
             "oc_su", "non_oc_su", "total_su",
             "first_commitment_pickup_date", "latest_commitment_pickup_date",
             "commitment_change_count", "first_carrier_name", "latest_carrier_name",
-            "planned_gi_date", "requested_delivery_date"],
+            "planned_gi_date", "actual_gi_date", "requested_delivery_date"],
         "meaning": [
             "SAP order / STO number (vgbel)",
             "TMS load number (systemLoadID)",
@@ -152,6 +152,7 @@ def main():
             "Carrier on first commitment",
             "Carrier on latest commitment",
             "Planned goods-issue date (SAP LIKP.wadat)",
+            "Actual goods-issue date (SAP LIKP.wadat_ist) — set once picked up / goods-issued",
             "Requested delivery date / RDD (SAP LIKP.lfdat)"],
     })
 

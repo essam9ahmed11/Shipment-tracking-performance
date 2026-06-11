@@ -318,7 +318,9 @@ JOIN hive_metastore.userdb_essam_ae.ocna_shipment_tracking_intersite t
 -- MAGIC   converted to SU via `marm` where `meinh='SU'`).
 -- MAGIC - **Oral-care flag**: material → `is_oral_care` lookup from `ocna_zsku_intersite_all_fnl`
 -- MAGIC   (`material_number` matched to SAP `matnr` after stripping leading zeros).
--- MAGIC - **RDD / planned GI**: SAP delivery header `likp` (`lfdat` = RDD, `wadat` = planned GI).
+-- MAGIC - **RDD / planned GI / actual GI**: SAP delivery header `likp` (`lfdat` = RDD,
+-- MAGIC   `wadat` = planned goods issue, `wadat_ist` = **actual goods issue** — populated once
+-- MAGIC   the load is picked up / goods-issued, e.g. for `In Transit` loads).
 -- MAGIC - **Destination plant**: the delivery ship-to customer (`likp.kunnr`) mapped to the plant
 -- MAGIC   code (`ship_to_id`, e.g. `PB360`) via `ocna_zsku_intersite_all_fnl` — exactly the
 -- MAGIC   `destination_plant` representation used by the normal shipment tracking table.
@@ -367,6 +369,7 @@ dest_plant_map AS (
 delivery_dates AS (
   SELECT vbeln, kunnr,
     MAX(CASE WHEN wadat NOT IN ('','00000000') THEN TO_DATE(wadat,'yyyyMMdd') END) AS planned_gi_date,
+    MAX(CASE WHEN wadat_ist NOT IN ('','00000000') THEN TO_DATE(wadat_ist,'yyyyMMdd') END) AS actual_gi_date,
     MAX(CASE WHEN lfdat NOT IN ('','00000000') THEN TO_DATE(lfdat,'yyyyMMdd') END) AS requested_delivery_date
   FROM cdl_oss_prod.silver_sap_n6p.likp GROUP BY vbeln, kunnr
 ),
@@ -405,6 +408,7 @@ SELECT
   ol.first_carrier_name,
   ol.latest_carrier_name,
   dd.planned_gi_date,
+  dd.actual_gi_date,
   dd.requested_delivery_date
 FROM order_lines ol
 LEFT JOIN delivery_dates dd ON dd.vbeln = ol.delivery
@@ -416,7 +420,7 @@ GROUP BY
   ol.destination_location, ol.origin_state_province, ol.destination_state_province,
   ol.first_commitment_pickup_date, ol.latest_commitment_pickup_date,
   ol.commitment_change_count, ol.first_carrier_name, ol.latest_carrier_name,
-  dd.planned_gi_date, dd.requested_delivery_date
+  dd.planned_gi_date, dd.actual_gi_date, dd.requested_delivery_date
 HAVING dpm.destination_plant IS NOT NULL   -- INTERPLANT only (destination maps to a plant)
    AND CASE WHEN SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END) > 0
             THEN 'Yes' ELSE 'No' END = 'Yes'   -- oral care only
