@@ -127,6 +127,66 @@ def load(refresh=False):
     return cols, rows, loaded_at
 
 
+# ----------------------------------------------------------------------------
+# Operational "committed but not shipped" order-level table (small, ~hundreds)
+# ----------------------------------------------------------------------------
+OPS_TABLE = 'hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders'
+OPS_CACHE_PATH = os.path.join(os.path.dirname(__file__), 'operational_cache.pkl')
+
+
+def _fetch_operational():
+    """Pull every row of the operational not-shipped order-level table."""
+    headers, base = _headers()
+    url = base + '/api/2.0/sql/statements'
+    q = f'SELECT * FROM {OPS_TABLE}'
+    r = requests.post(url, headers=headers, json={
+        'warehouse_id': WAREHOUSE_ID,
+        'statement': q,
+        'wait_timeout': '0s',
+        'disposition': 'INLINE',
+        'format': 'JSON_ARRAY',
+    }, timeout=30)
+    sid = r.json()['statement_id']
+
+    for _ in range(60):
+        time.sleep(3)
+        rg = requests.get(f'{url}/{sid}', headers=headers, timeout=30)
+        d = rg.json()
+        state = d['status']['state']
+        if state == 'SUCCEEDED':
+            break
+        if state in ('FAILED', 'CANCELED'):
+            raise RuntimeError(d['status'].get('error', state))
+    else:
+        raise RuntimeError('Timed out waiting for operational query')
+
+    cols = [c['name'] for c in d['manifest']['schema']['columns']]
+    rows = []
+    result = d.get('result', {})
+    rows.extend(result.get('data_array', []) or [])
+    next_idx = result.get('next_chunk_index')
+    while next_idx is not None:
+        rc = requests.get(f'{url}/{sid}/result/chunks/{next_idx}', headers=headers, timeout=30)
+        dc = rc.json()
+        rows.extend(dc.get('data_array', []) or [])
+        next_idx = dc.get('next_chunk_index')
+    return cols, rows
+
+
+def load_operational(refresh=False):
+    """Return (cols, rows, loaded_at) for the operational table. Cached locally."""
+    if not refresh and os.path.exists(OPS_CACHE_PATH):
+        with open(OPS_CACHE_PATH, 'rb') as f:
+            data = pickle.load(f)
+        return data['cols'], data['rows'], data.get('loaded_at', 'cache')
+
+    cols, rows = _fetch_operational()
+    loaded_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    with open(OPS_CACHE_PATH, 'wb') as f:
+        pickle.dump({'cols': cols, 'rows': rows, 'loaded_at': loaded_at}, f)
+    return cols, rows, loaded_at
+
+
 if __name__ == '__main__':
     import sys
     refresh = '--refresh' in sys.argv

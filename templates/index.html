@@ -230,6 +230,14 @@
   .anom-table .yes { color:#0a8a3c; font-weight:700; }
   .anom-table .no { color:#c8102e; font-weight:700; }
   .anom-table .gi { color:#7b2cbf; font-weight:600; }
+  /* Operational review delay badges + pills */
+  .dbadge { display:inline-block; min-width:34px; text-align:center; padding:2px 6px; border-radius:10px; font-weight:700; font-size:10.5px; }
+  .dbadge.d-late { background:#fde7ea; color:#c8102e; }
+  .dbadge.d-early { background:#e7f4ec; color:#0a8a3c; }
+  .dbadge.d-on { background:#eef1f5; color:#5b6770; }
+  .stat-pill { display:inline-block; padding:2px 7px; border-radius:10px; background:#e6effa; color:#00529b; font-size:10px; font-weight:700; white-space:nowrap; }
+  .carr-changed { color:#c8102e; font-weight:700; }
+  .carr-changed::after { content:' \\21bb'; font-weight:700; }
   .tl { position:relative; height:48px; }
   .tl .track { position:absolute; left:0; right:0; top:22px; height:2px; background:var(--line); }
   .tl .pt { position:absolute; transform:translateX(-50%); top:10px; }
@@ -438,30 +446,52 @@
   <div class="panel" id="panel-ops">
     <div class="filters" id="opsFilters"></div>
     <div class="section">
-      <h2>Data Quality &amp; Date Anomalies <span class="pill" id="anomTotal"></span></h2>
+      <h2>Committed but NOT Shipped <span class="pill" id="opsTotal"></span></h2>
       <p class="muted" style="margin:-4px 0 12px;">
-        Loads whose milestone dates contradict each other. The ship event is the
-        <b>Actual GI</b> (gold-layer <code>load complete date</code>, which matches SAP
-        actual GI on 97.8% of loads), cross-checked against the authoritative
-        <b>SAP Actual GI</b> (<code>likp.wadat_ist</code>) joined at load grain.
+        Interplant + oral-care order-loads that are <b>committed for pickup but not yet completed</b>
+        in TMS (no load-complete). <b>Delay</b> is measured from the goods-issue event
+        (<b>Actual GI</b> = <code>likp.wadat_ist</code> for picked-up loads, otherwise today)
+        against the <b>first</b> and <b>latest</b> pickup commitments from the TMS audit trail.
+        Positive = late.
       </p>
-      <div class="anom-cards" id="anomCards"><div class="loading"><span class="spin"></span> Loading…</div></div>
-      <div class="anom-detail">
-        <h3 id="anomDetailTitle" style="color:var(--pg-blue-dark);margin:18px 0 8px;">Flagged loads</h3>
-        <div class="muted" id="anomDetailMeta" style="margin-bottom:8px;"></div>
-        <div class="table-wrap">
-          <table class="anom-table" id="anomTable">
-            <thead>
-              <tr>
-                <th>Load</th><th>Order</th><th>Lane</th><th>Carrier</th>
-                <th>Old PU</th><th>New PU</th><th>Actual GI</th>
-                <th>SAP GI</th><th>Req. Del</th><th>Arrival</th>
-                <th>Gap (d)</th><th>SAP resolves?</th>
-              </tr>
-            </thead>
-            <tbody id="anomRows"><tr><td colspan="12" class="muted">Loading…</td></tr></tbody>
-          </table>
+
+      <div class="kpi-row" id="opsKpiRow">
+        <div class="kpi k1"><div class="label"># Orders</div><div class="val" id="opsKOrders">–</div><div class="desc">After filters</div></div>
+        <div class="kpi k2"><div class="label">Avg Delay vs 1st</div><div class="val" id="opsKAvgFirst">–</div><div class="desc">Days late vs first commit</div></div>
+        <div class="kpi k3"><div class="label">Avg Delay vs Latest</div><div class="val" id="opsKAvgLatest">–</div><div class="desc">Days late vs latest commit</div></div>
+        <div class="kpi k4"><div class="label">Late vs Latest</div><div class="val" id="opsKLate">–</div><div class="desc">Orders past latest commit</div></div>
+      </div>
+
+      <div class="order-controls" style="margin:14px 0 6px;">
+        <div class="f" style="min-width:200px;">
+          <label>Sort by</label>
+          <select id="opsSort">
+            <option value="days_vs_latest">Delay vs latest commit</option>
+            <option value="days_vs_first">Delay vs first commit</option>
+            <option value="latest_pu">Latest commitment date</option>
+            <option value="first_pu">First commitment date</option>
+            <option value="actual_gi">Actual GI date</option>
+          </select>
         </div>
+        <label class="chk"><input type="checkbox" id="opsLateOnly"> Show only <b>late vs latest</b> commit</label>
+        <label class="chk"><input type="checkbox" id="opsCarrierChanged"> Show only <b>carrier changed</b></label>
+      </div>
+
+      <div class="table-wrap">
+        <table class="anom-table" id="opsTable">
+          <thead>
+            <tr>
+              <th>Order</th><th>Load</th><th>Delivery</th>
+              <th>Status</th><th>Lane</th><th>Dest Plant</th>
+              <th>OC?</th><th class="num">OC SU</th><th class="num">Total SU</th>
+              <th>First Carrier</th><th>Latest Carrier</th>
+              <th>1st Commit</th><th>Latest Commit</th>
+              <th>Planned GI</th><th>Actual GI</th><th>RDD</th>
+              <th class="num">Δ vs 1st</th><th class="num">Δ vs Latest</th>
+            </tr>
+          </thead>
+          <tbody id="opsRows"><tr><td colspan="18" class="muted">Loading…</td></tr></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -639,45 +669,50 @@ document.querySelectorAll('.tab').forEach(t=>{
     t.classList.add('active');
     document.getElementById('panel-'+t.dataset.tab).classList.add('active');
     if(t.dataset.tab==='orders') loadOrders();
-    if(t.dataset.tab==='ops') loadAnomalies();
+    if(t.dataset.tab==='ops') loadOperational();
   };
 });
 
 // ---------- build filters ----------
 const FILTER_FIELDS = ['shipping_plant','destination_plant','lane_pd','tms_carrier_name','service_type','destination_city','is_oral_care','load_number'];
+const OPS_FILTER_FIELDS = ['shipping_plant','destination_plant','lane_pd','operational_status','shipment_stage','first_carrier_name','latest_carrier_name','is_oral_care'];
+let OPS_FILTER_META = null;
 
 // selected values per container+field: SELS[containerId][field] = Set
 const SELS = { perfFilters:{}, orderFilters:{}, opsFilters:{} };
 
 async function initFilters(){
   FILTER_META = await (await fetch('/api/filters')).json();
-  buildFilterUI('perfFilters');
-  buildFilterUI('orderFilters');
-  buildFilterUI('opsFilters');
+  OPS_FILTER_META = await (await fetch('/api/operational_filters')).json();
+  buildFilterUI('perfFilters', FILTER_FIELDS, FILTER_META, true);
+  buildFilterUI('orderFilters', FILTER_FIELDS, FILTER_META, true);
+  buildFilterUI('opsFilters', OPS_FILTER_FIELDS, OPS_FILTER_META, false);
 }
 
-function buildFilterUI(containerId){
+function buildFilterUI(containerId, fields, meta, showMatNote){
   const c = document.getElementById(containerId);
   c.innerHTML='';
   SELS[containerId] = {};
-  FILTER_FIELDS.forEach(field=>{
+  fields.forEach(field=>{
     SELS[containerId][field] = new Set();
-    const vals = FILTER_META[field] || [];
+    const vals = meta[field] || [];
     const wrap = el('div','f');
-    wrap.appendChild(el('label',null, FILTER_META._labels[field] || field));
+    wrap.appendChild(el('label',null, (meta._labels && meta._labels[field]) || field));
     wrap.appendChild(buildMultiSelect(containerId, field, vals));
     c.appendChild(wrap);
   });
   // Material number note (not available at load grain)
-  const note = el('div','f');
-  note.innerHTML = '<label>Material Number</label><input disabled placeholder="n/a at load grain" title="Tracking table is load-level; material not available">';
-  c.appendChild(note);
+  if(showMatNote){
+    const note = el('div','f');
+    note.innerHTML = '<label>Material Number</label><input disabled placeholder="n/a at load grain" title="Tracking table is load-level; material not available">';
+    c.appendChild(note);
+  }
 
   const actions = el('div','filter-actions');
   const apply = el('button','btn','Apply Filters');
   const runFor = ()=>{
     if(containerId==='perfFilters') refreshAll();
-    else if(containerId==='opsFilters') loadAnomalies();
+    else if(containerId==='opsFilters') loadOperational();
     else loadOrders();
   };
   apply.onclick = runFor;
@@ -1068,61 +1103,78 @@ function renderTimeline(orders, container){
   });
 }
 
-// ---------- data quality / anomalies ----------
-let ANOM_CLASS = 'arr_before_cko';
+// ---------- operational review (committed but not shipped) ----------
+let OPS_ALL = [];   // full order list from last fetch (client-side checkbox filters)
 
-async function loadAnomalies(){
+async function loadOperational(){
   const f = collectFilters('opsFilters');
-  const cards = document.getElementById('anomCards');
-  const rows = document.getElementById('anomRows');
-  cards.innerHTML = '<div class="loading"><span class="spin"></span> Loading…</div>';
-  rows.innerHTML = '<tr><td colspan="12" class="muted">Loading…</td></tr>';
-  const d = await postJSON('/api/anomalies', {filters: f, anomaly_class: ANOM_CLASS});
-  document.getElementById('anomTotal').textContent = d.total_shipments.toLocaleString()+' loads';
+  const sort = document.getElementById('opsSort').value;
+  const rows = document.getElementById('opsRows');
+  rows.innerHTML = '<tr><td colspan="18" class="muted">Loading…</td></tr>';
+  const d = await postJSON('/api/operational', {filters: f, sort});
+  const s = d.summary;
+  document.getElementById('opsTotal').textContent = s.orders.toLocaleString()+' orders';
+  document.getElementById('opsKOrders').textContent = s.orders.toLocaleString();
+  document.getElementById('opsKAvgFirst').innerHTML =
+    s.avg_days_vs_first==null ? '–' : s.avg_days_vs_first+'<small>d</small>';
+  document.getElementById('opsKAvgLatest').innerHTML =
+    s.avg_days_vs_latest==null ? '–' : s.avg_days_vs_latest+'<small>d</small>';
+  document.getElementById('opsKLate').textContent = s.late_vs_latest.toLocaleString();
 
-  // ensure the selected class is one that exists; else fall back to first
-  if(!d.classes.some(c=>c.key===ANOM_CLASS) && d.classes.length){ ANOM_CLASS = d.classes[0].key; }
-
-  cards.innerHTML = d.classes.map(c=>`
-    <div class="anom-card ${c.key===ANOM_CLASS?'active':''}" data-class="${c.key}">
-      <div class="ac-label">${escapeHtml(c.label)}</div>
-      <div class="ac-count">${c.count.toLocaleString()}</div>
-      <div class="ac-pct">${c.pct}% of all loads</div>
-      <div class="ac-sap">SAP GI resolves ${c.sap_resolved.toLocaleString()} (${c.sap_resolved_pct}%)</div>
-      <div class="ac-logic">${escapeHtml(c.logic)}</div>
-    </div>`).join('');
-  cards.querySelectorAll('.anom-card').forEach(card=>{
-    card.onclick = ()=>{ ANOM_CLASS = card.dataset.class; loadAnomalies(); };
-  });
-
-  const sel = d.classes.find(c=>c.key===d.listed_class) || d.classes.find(c=>c.key===ANOM_CLASS);
-  document.getElementById('anomDetailTitle').textContent =
-    'Flagged loads — ' + (sel ? sel.label : '');
-  document.getElementById('anomDetailMeta').textContent = d.detail_truncated
-    ? `Showing top ${d.detail.length} of ${d.detail_total.toLocaleString()} (sorted by largest contradiction).`
-    : `Showing all ${d.detail_total.toLocaleString()}.`;
-
-  const dash = v => v ? escapeHtml(String(v).slice(5)) : '<span class="muted">—</span>';
-  rows.innerHTML = d.detail.map(r=>{
-    const res = r.sap_resolves===true ? '<span class="yes">Yes</span>'
-      : r.sap_resolves===false ? '<span class="no">No</span>'
-      : '<span class="muted">n/a</span>';
-    return `<tr>
-      <td>${escapeHtml(r.load_number||'—')}</td>
-      <td>${escapeHtml(r.order_number||'—')}</td>
-      <td>${escapeHtml(r.lane||'—')}</td>
-      <td>${escapeHtml(r.carrier||'—')}</td>
-      <td>${dash(r.old_pickup_date)}</td>
-      <td>${dash(r.newest_pickup_date)}</td>
-      <td>${dash(r.checkout_date)}</td>
-      <td class="gi">${dash(r.sap_actual_gi_date)}</td>
-      <td>${dash(r.requested_delivery_date)}</td>
-      <td>${dash(r.actual_arrival_date)}</td>
-      <td>${r.gap_days!=null?r.gap_days:'—'}</td>
-      <td>${res}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="12" class="muted">No loads in this class for the current filters.</td></tr>';
+  OPS_ALL = d.orders;
+  renderOps();
 }
+
+function renderOps(){
+  const rows = document.getElementById('opsRows');
+  const lateOnly = document.getElementById('opsLateOnly').checked;
+  const changedOnly = document.getElementById('opsCarrierChanged').checked;
+  let list = OPS_ALL;
+  if(lateOnly) list = list.filter(r => (r.days_vs_latest||0) > 0);
+  if(changedOnly) list = list.filter(r => r.carrier_changed);
+
+  const dash = v => v ? escapeHtml(String(v).slice(0,10)) : '<span class="muted">—</span>';
+  const num = v => (v==null||v==='') ? '<span class="muted">—</span>'
+      : Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
+  const delay = (v, ref) => {
+    if(v==null) return '<span class="muted">—</span>';
+    const cls = v>0 ? 'd-late' : (v<0 ? 'd-early' : 'd-on');
+    const sign = v>0 ? '+' : '';
+    const tip = ref ? ' title="ref: '+escapeHtml(ref)+'"' : '';
+    return `<span class="dbadge ${cls}"${tip}>${sign}${v}d</span>`;
+  };
+  const carrierCell = (first, latest, changed) => {
+    if(changed) return `<span class="carr-changed" title="Carrier reassigned">${escapeHtml(latest||'—')}</span>`;
+    return escapeHtml(latest || first || '—');
+  };
+
+  rows.innerHTML = list.map(r=>`
+    <tr>
+      <td>${escapeHtml(r.order_number||'—')}</td>
+      <td>${escapeHtml(r.load_number||'—')}</td>
+      <td>${escapeHtml(r.delivery_number||'—')}</td>
+      <td><span class="stat-pill">${escapeHtml(r.operational_status||'—')}</span></td>
+      <td>${escapeHtml(r.lane||'—')}</td>
+      <td title="${escapeHtml(r.destination_plant_desc||'')}">${escapeHtml(r.destination_plant||'—')}</td>
+      <td>${r.is_oral_care==='Yes'?'<span class="yes">Yes</span>':escapeHtml(r.is_oral_care||'—')}</td>
+      <td class="num">${num(r.oc_su)}</td>
+      <td class="num">${num(r.total_su)}</td>
+      <td>${escapeHtml(r.first_carrier_name||'—')}</td>
+      <td>${carrierCell(r.first_carrier_name, r.latest_carrier_name, r.carrier_changed)}</td>
+      <td>${dash(r.first_commitment_pickup_date)}</td>
+      <td>${dash(r.latest_commitment_pickup_date)}</td>
+      <td>${dash(r.planned_gi_date)}</td>
+      <td class="gi">${dash(r.actual_gi_date)}</td>
+      <td>${dash(r.requested_delivery_date)}</td>
+      <td class="num">${delay(r.days_vs_first, r.delay_ref_kind)}</td>
+      <td class="num">${delay(r.days_vs_latest, r.delay_ref_kind)}</td>
+    </tr>`).join('') ||
+    '<tr><td colspan="18" class="muted">No orders match the current filters.</td></tr>';
+}
+
+document.getElementById('opsSort').onchange = loadOperational;
+document.getElementById('opsLateOnly').onchange = renderOps;
+document.getElementById('opsCarrierChanged').onchange = renderOps;
 
 // ---------- init ----------
 (async function(){

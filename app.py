@@ -94,6 +94,54 @@ ALL_CHECKOUTS = [d['_checkout'] for d in DATA if d['_checkout']]
 ANCHOR_DATE = max(ALL_CHECKOUTS) if ALL_CHECKOUTS else datetime.today().date()
 
 # ----------------------------------------------------------------------------
+# Operational "committed but not shipped" order-level data
+# (interplant + oral-care, from ocna_operational_not_shipped_orders)
+# ----------------------------------------------------------------------------
+OPS_COLS, OPS_ROWS, OPS_LOADED_AT = data_loader.load_operational(refresh=False)
+
+OPS_DATA = []
+for r in OPS_ROWS:
+    d = dict(zip(OPS_COLS, r))
+    first_pu = _parse_date(d.get('first_commitment_pickup_date'))
+    latest_pu = _parse_date(d.get('latest_commitment_pickup_date'))
+    actual_gi = _parse_date(d.get('actual_gi_date'))
+    planned_gi = _parse_date(d.get('planned_gi_date'))
+    rdd = _parse_date(d.get('requested_delivery_date'))
+    d['_first_pu'] = first_pu
+    d['_latest_pu'] = latest_pu
+    d['_actual_gi'] = actual_gi
+    d['_planned_gi'] = planned_gi
+    d['_rdd'] = rdd
+    # Reference event for delay: actual goods issue if the load was picked up
+    # (In Transit), otherwise "today" (still awaiting pickup).
+    ref = actual_gi or ANCHOR_DATE
+    d['_delay_ref'] = ref
+    d['_delay_ref_kind'] = 'Actual GI' if actual_gi else 'Today (awaiting)'
+    # Days delayed (positive = late) vs first / latest commitment.
+    d['_days_vs_first'] = (ref - first_pu).days if first_pu else None
+    d['_days_vs_latest'] = (ref - latest_pu).days if latest_pu else None
+    # Lane label (plant -> plant), matching the rest of the app.
+    sp = (d.get('shipping_plant') or '').strip()
+    dp = (d.get('destination_plant') or '').strip()
+    d['lane_pd'] = f'{sp} \u2192 {dp}' if (sp or dp) else ''
+    for k in ('first_carrier_name', 'latest_carrier_name'):
+        if d.get(k):
+            d[k] = str(d[k]).strip()
+    OPS_DATA.append(d)
+
+OPS_FILTER_FIELDS = OrderedDict([
+    ('shipping_plant', 'Shipping Plant'),
+    ('destination_plant', 'Destination Plant'),
+    ('lane_pd', 'Lane (Plant \u2192 Plant)'),
+    ('operational_status', 'Operational Status'),
+    ('shipment_stage', 'Shipment Stage'),
+    ('first_carrier_name', 'First Carrier'),
+    ('latest_carrier_name', 'Latest Carrier'),
+    ('is_oral_care', 'Is Oral Care?'),
+])
+
+
+# ----------------------------------------------------------------------------
 # Filter definitions
 # ----------------------------------------------------------------------------
 FILTER_FIELDS = OrderedDict([
@@ -589,6 +637,110 @@ def api_anomalies():
     })
 
 
+# ----------------------------------------------------------------------------
+# Operational Review — committed but NOT shipped (interplant + oral care)
+# ----------------------------------------------------------------------------
+@app.route('/api/operational_filters')
+def api_operational_filters():
+    """Distinct values for the operational-review filter dropdowns."""
+    result = {}
+    for field in OPS_FILTER_FIELDS:
+        vals = set()
+        for r in OPS_DATA:
+            v = r.get(field)
+            if v not in (None, ''):
+                vals.add(v)
+        result[field] = sorted(vals)
+    result['_labels'] = OPS_FILTER_FIELDS
+    return jsonify(result)
+
+
+@app.route('/api/operational', methods=['POST'])
+def api_operational():
+    """Order-level operational detail with delay-vs-commitment metrics."""
+    body, filters = _read_filters()
+    rows = apply_filters(OPS_DATA, filters)
+
+    sort_key = body.get('sort', 'days_vs_latest')
+    key_map = {
+        'days_vs_first': '_days_vs_first',
+        'days_vs_latest': '_days_vs_latest',
+        'first_pu': '_first_pu',
+        'latest_pu': '_latest_pu',
+        'actual_gi': '_actual_gi',
+    }
+    sk = key_map.get(sort_key, '_days_vs_latest')
+
+    def _sv(r):
+        v = r.get(sk)
+        if v is None:
+            return (1, 0)           # nulls last
+        if hasattr(v, 'toordinal'):
+            return (0, -v.toordinal())
+        return (0, -v)
+    rows_sorted = sorted(rows, key=_sv)
+
+    # KPI summary
+    n_orders = len({r.get('order_number') for r in rows})
+    n_loads = len({r.get('load_number') for r in rows})
+    oc_su = sum(float(r.get('oc_su') or 0) for r in rows)
+    total_su = sum(float(r.get('total_su') or 0) for r in rows)
+    df = [r['_days_vs_first'] for r in rows if r['_days_vs_first'] is not None]
+    dl = [r['_days_vs_latest'] for r in rows if r['_days_vs_latest'] is not None]
+    late_first = sum(1 for v in df if v > 0)
+    late_latest = sum(1 for v in dl if v > 0)
+    summary = {
+        'orders': n_orders,
+        'loads': n_loads,
+        'oc_su': round(oc_su),
+        'total_su': round(total_su),
+        'avg_days_vs_first': round(sum(df) / len(df), 1) if df else None,
+        'avg_days_vs_latest': round(sum(dl) / len(dl), 1) if dl else None,
+        'max_days_vs_latest': max(dl) if dl else None,
+        'late_vs_first': late_first,
+        'late_vs_latest': late_latest,
+    }
+
+    out = []
+    for r in rows_sorted:
+        out.append({
+            'order_number': r.get('order_number'),
+            'load_number': r.get('load_number'),
+            'delivery_number': r.get('delivery_number'),
+            'operational_status': r.get('operational_status'),
+            'shipment_stage': r.get('shipment_stage'),
+            'lane': r.get('lane_pd'),
+            'shipping_plant': r.get('shipping_plant'),
+            'destination_plant': r.get('destination_plant'),
+            'destination_plant_desc': r.get('destination_plant_desc'),
+            'is_oral_care': r.get('is_oral_care'),
+            'oc_su': r.get('oc_su'),
+            'total_su': r.get('total_su'),
+            'first_carrier_name': r.get('first_carrier_name'),
+            'latest_carrier_name': r.get('latest_carrier_name'),
+            'commitment_change_count': r.get('commitment_change_count'),
+            'first_commitment_pickup_date': r.get('first_commitment_pickup_date'),
+            'latest_commitment_pickup_date': r.get('latest_commitment_pickup_date'),
+            'planned_gi_date': r.get('planned_gi_date'),
+            'actual_gi_date': r.get('actual_gi_date'),
+            'requested_delivery_date': r.get('requested_delivery_date'),
+            'days_vs_first': r.get('_days_vs_first'),
+            'days_vs_latest': r.get('_days_vs_latest'),
+            'delay_ref_kind': r.get('_delay_ref_kind'),
+            'carrier_changed': bool(
+                (r.get('first_carrier_name') or '') and (r.get('latest_carrier_name') or '')
+                and r.get('first_carrier_name') != r.get('latest_carrier_name')),
+        })
+
+    return jsonify({
+        'summary': summary,
+        'orders': out,
+        'loaded_at': OPS_LOADED_AT,
+        'anchor': ANCHOR_DATE.isoformat(),
+    })
+
+
 if __name__ == '__main__':
     print(f'Loaded {len(DATA)} rows (cache from {LOADED_AT}). Anchor date: {ANCHOR_DATE}')
+    print(f'Operational rows: {len(OPS_DATA)} (cache from {OPS_LOADED_AT})')
     app.run(host='127.0.0.1', port=5050, debug=False)
