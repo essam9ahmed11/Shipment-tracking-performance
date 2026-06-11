@@ -110,6 +110,15 @@
   .ms-opt input { width: auto; margin: 0; }
   .ms-opt .cnt { margin-left: auto; color: var(--gray); font-size: 10px; }
   .ms-empty { color: var(--gray); font-size: 12px; padding: 8px; text-align: center; }
+  /* Smart Actual GI period filter (Month/Week/Day toggle + multiselect) */
+  .gi-filter .gi-seg { display: flex; gap: 0; margin-bottom: 6px; border: 1px solid var(--line);
+    border-radius: 6px; overflow: hidden; }
+  .gi-seg-btn { flex: 1; padding: 5px 0; font-size: 11px; font-weight: 600; cursor: pointer;
+    background: #fbfdff; border: none; border-right: 1px solid var(--line); color: var(--gray);
+    transition: .12s; }
+  .gi-seg-btn:last-child { border-right: none; }
+  .gi-seg-btn:hover { background: var(--pg-light); }
+  .gi-seg-btn.active { background: var(--pg-blue); color: #fff; }
   .filter-actions { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; }
   .btn {
     background: var(--pg-blue); color: #fff; border: none; padding: 8px 18px;
@@ -699,6 +708,8 @@ function buildFilterUI(containerId, fields, meta, showMatNote){
   const c = document.getElementById(containerId);
   c.innerHTML='';
   SELS[containerId] = {};
+  // Smart Actual GI period filter (day / week / month) — first in the bar.
+  c.appendChild(buildGiFilter(containerId, meta));
   fields.forEach(field=>{
     SELS[containerId][field] = new Set();
     const vals = meta[field] || [];
@@ -730,6 +741,49 @@ function buildFilterUI(containerId, fields, meta, showMatNote){
   };
   actions.appendChild(apply); actions.appendChild(reset);
   c.appendChild(actions);
+}
+
+// Smart "Actual GI period" filter: a Month/Week/Day toggle that swaps which
+// period multiselect is active. Only the active granularity's selections are
+// sent to the backend (gi_month / gi_week / gi_day), so it behaves as one
+// intuitive date filter.
+function buildGiFilter(containerId, meta){
+  const wrap = el('div','f gi-filter');
+  wrap.appendChild(el('label',null,'Actual GI period'));
+
+  const seg = el('div','gi-seg');
+  const host = el('div','gi-host');
+  const grans = [['month','Month'],['week','Week'],['day','Day']];
+  const msByGran = {};
+
+  grans.forEach(([g])=>{
+    const field = 'gi_'+g;
+    SELS[containerId][field] = new Set();
+    const ms = buildMultiSelect(containerId, field, meta[field] || []);
+    ms.classList.add('gi-ms');
+    msByGran[g] = ms;
+    host.appendChild(ms);
+  });
+
+  function setActive(g){
+    grans.forEach(([gg])=>{
+      if(gg!==g){ SELS[containerId]['gi_'+gg].clear(); updateMsButton(msByGran[gg]); }
+      msByGran[gg].style.display = (gg===g) ? '' : 'none';
+    });
+    seg.querySelectorAll('button').forEach(b=> b.classList.toggle('active', b.dataset.g===g));
+  }
+
+  grans.forEach(([g,lbl])=>{
+    const b = el('button','gi-seg-btn',lbl);
+    b.type='button'; b.dataset.g=g;
+    b.onclick = ()=> setActive(g);
+    seg.appendChild(b);
+  });
+
+  wrap.appendChild(seg);
+  wrap.appendChild(host);
+  setActive('month');
+  return wrap;
 }
 
 function buildMultiSelect(containerId, field, vals){

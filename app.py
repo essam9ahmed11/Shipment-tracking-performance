@@ -35,6 +35,20 @@ def _parse_date(s):
         return None
 
 
+def _gi_periods(dt):
+    """Return (day, week, month) period labels for an Actual GI date.
+
+    day   = 'YYYY-MM-DD', week = 'YYYY-Www' (ISO week, Mon-Sun),
+    month = 'YYYY-MM'. Empty strings when the date is missing.
+    """
+    if not dt:
+        return '', '', ''
+    iso = dt.isocalendar()
+    return (dt.isoformat(),
+            f'{iso[0]}-W{iso[1]:02d}',
+            f'{dt.year}-{dt.month:02d}')
+
+
 # Pre-process rows into dicts with parsed dates + measure flags
 DATA = []
 for r in ROWS:
@@ -87,6 +101,8 @@ for r in ROWS:
     sp = (d.get('shipping_plant') or '').strip()
     dp = (d.get('destination_plant') or '').strip()
     d['lane_pd'] = f'{sp} \u2192 {dp}' if (sp or dp) else ''
+    # Actual GI period buckets (day / week / month) for the smart date filter.
+    d['gi_day'], d['gi_week'], d['gi_month'] = _gi_periods(co)
     DATA.append(d)
 
 # Anchor "today" to the latest checkout date in the data
@@ -124,6 +140,8 @@ for r in OPS_ROWS:
     sp = (d.get('shipping_plant') or '').strip()
     dp = (d.get('destination_plant') or '').strip()
     d['lane_pd'] = f'{sp} \u2192 {dp}' if (sp or dp) else ''
+    # Actual GI period buckets (day / week / month) for the smart date filter.
+    d['gi_day'], d['gi_week'], d['gi_month'] = _gi_periods(actual_gi)
     for k in ('first_carrier_name', 'latest_carrier_name'):
         if d.get(k):
             d[k] = str(d[k]).strip()
@@ -209,7 +227,8 @@ def api_filters():
                 vals.add(v)
         # Cap very large lists (load_number, lane) — still return all but sorted
         result[field] = sorted(vals)
-    result['_labels'] = FILTER_FIELDS
+    result.update(_gi_period_options(DATA))
+    result['_labels'] = {**FILTER_FIELDS, **GI_PERIOD_LABELS}
     return jsonify(result)
 
 
@@ -217,6 +236,28 @@ def _read_filters():
     body = request.get_json(silent=True) or {}
     filters = body.get('filters', {})
     return body, filters
+
+
+def _gi_period_options(dataset):
+    """Distinct Actual GI period labels present in a dataset, newest first."""
+    days, weeks, months = set(), set(), set()
+    for r in dataset:
+        if r.get('gi_day'):
+            days.add(r['gi_day'])
+            weeks.add(r['gi_week'])
+            months.add(r['gi_month'])
+    return {
+        'gi_day': sorted(days, reverse=True),
+        'gi_week': sorted(weeks, reverse=True),
+        'gi_month': sorted(months, reverse=True),
+    }
+
+
+GI_PERIOD_LABELS = {
+    'gi_day': 'Actual GI — Day',
+    'gi_week': 'Actual GI — Week',
+    'gi_month': 'Actual GI — Month',
+}
 
 
 @app.route('/api/performance', methods=['POST'])
@@ -651,7 +692,8 @@ def api_operational_filters():
             if v not in (None, ''):
                 vals.add(v)
         result[field] = sorted(vals)
-    result['_labels'] = OPS_FILTER_FIELDS
+    result.update(_gi_period_options(OPS_DATA))
+    result['_labels'] = {**OPS_FILTER_FIELDS, **GI_PERIOD_LABELS}
     return jsonify(result)
 
 
