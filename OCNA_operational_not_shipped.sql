@@ -319,6 +319,15 @@ JOIN hive_metastore.userdb_essam_ae.ocna_shipment_tracking_intersite t
 -- MAGIC - **Oral-care flag**: material → `is_oral_care` lookup from `ocna_zsku_intersite_all_fnl`
 -- MAGIC   (`material_number` matched to SAP `matnr` after stripping leading zeros).
 -- MAGIC - **RDD / planned GI**: SAP delivery header `likp` (`lfdat` = RDD, `wadat` = planned GI).
+-- MAGIC - **Destination plant**: the delivery ship-to customer (`likp.kunnr`) mapped to the plant
+-- MAGIC   code (`ship_to_id`, e.g. `PB360`) via `ocna_zsku_intersite_all_fnl` — exactly the
+-- MAGIC   `destination_plant` representation used by the normal shipment tracking table.
+-- MAGIC
+-- MAGIC ### Filters applied here (per request)
+-- MAGIC - **INTERPLANT only**: keep order-loads whose destination ship-to maps to a P&G plant
+-- MAGIC   code (`destination_plant IS NOT NULL`). Customer destinations (e.g. Walmart DCs) are
+-- MAGIC   dropped, leaving true plant-to-plant / intersite moves.
+-- MAGIC - **Oral care only**: keep order-loads flagged `is_oral_care = 'Yes'`.
 -- MAGIC
 -- MAGIC Output table: `hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders`
 
@@ -343,11 +352,23 @@ mat_oc AS (
   FROM hive_metastore.userdb_essam_ae.ocna_zsku_intersite_all_fnl
   WHERE material_number RLIKE '^[0-9]+$' GROUP BY CAST(material_number AS BIGINT)
 ),
+-- ship-to customer (likp.kunnr) -> plant code (ship_to_id, e.g. PB360), from intersite history.
+-- A non-null mapping == an intersite/INTERPLANT destination.
+dest_plant_map AS (
+  SELECT h.kunnr,
+         MAX(z.ship_to_id)          AS destination_plant,
+         MAX(z.ship_to_description) AS destination_plant_desc
+  FROM cdl_oss_prod.silver_sap_n6p.likp h
+  JOIN hive_metastore.userdb_essam_ae.ocna_zsku_intersite_all_fnl z
+    ON z.dlvry_doc_num = h.vbeln
+  WHERE h.kunnr IS NOT NULL AND z.ship_to_id IS NOT NULL
+  GROUP BY h.kunnr
+),
 delivery_dates AS (
-  SELECT vbeln,
+  SELECT vbeln, kunnr,
     MAX(CASE WHEN wadat NOT IN ('','00000000') THEN TO_DATE(wadat,'yyyyMMdd') END) AS planned_gi_date,
     MAX(CASE WHEN lfdat NOT IN ('','00000000') THEN TO_DATE(lfdat,'yyyyMMdd') END) AS requested_delivery_date
-  FROM cdl_oss_prod.silver_sap_n6p.likp GROUP BY vbeln
+  FROM cdl_oss_prod.silver_sap_n6p.likp GROUP BY vbeln, kunnr
 ),
 order_lines AS (
   SELECT
@@ -370,6 +391,8 @@ SELECT
   ol.operational_status,
   ol.shipment_stage,
   ol.shipping_plant, ol.shipping_plant_desc, ol.shipping_point,
+  dpm.destination_plant,
+  dpm.destination_plant_desc,
   ol.destination_location, ol.origin_state_province, ol.destination_state_province,
   CASE WHEN SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END) > 0
        THEN 'Yes' ELSE 'No' END                                     AS is_oral_care,
@@ -385,13 +408,18 @@ SELECT
   dd.requested_delivery_date
 FROM order_lines ol
 LEFT JOIN delivery_dates dd ON dd.vbeln = ol.delivery
+LEFT JOIN dest_plant_map dpm ON dpm.kunnr = dd.kunnr
 GROUP BY
   ol.order_number, ol.load_id, ol.delivery, ol.operational_status, ol.shipment_stage,
   ol.shipping_plant, ol.shipping_plant_desc, ol.shipping_point,
+  dpm.destination_plant, dpm.destination_plant_desc,
   ol.destination_location, ol.origin_state_province, ol.destination_state_province,
   ol.first_commitment_pickup_date, ol.latest_commitment_pickup_date,
   ol.commitment_change_count, ol.first_carrier_name, ol.latest_carrier_name,
   dd.planned_gi_date, dd.requested_delivery_date
+HAVING dpm.destination_plant IS NOT NULL   -- INTERPLANT only (destination maps to a plant)
+   AND CASE WHEN SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END) > 0
+            THEN 'Yes' ELSE 'No' END = 'Yes'   -- oral care only
 ORDER BY ol.latest_commitment_pickup_date, ol.order_number;
 
 -- COMMAND ----------
@@ -415,8 +443,8 @@ ORDER BY total_su DESC;
 -- MAGIC ## Step 6: Export the order-level table to an Excel workbook
 -- MAGIC Run this Python cell (switch the cell language to Python in Databricks). It writes a
 -- MAGIC multi-sheet `.xlsx` to DBFS so you can download it from the workspace:
--- MAGIC `Data > DBFS > FileStore > operational_not_shipped_orders.xlsx`, or via
--- MAGIC `https://<workspace-host>/files/operational_not_shipped_orders.xlsx`.
+-- MAGIC `Data > DBFS > FileStore > operational_not_shipped_orders_interplant_oralcare.xlsx`, or via
+-- MAGIC `https://<workspace-host>/files/operational_not_shipped_orders_interplant_oralcare.xlsx`.
 -- MAGIC
 -- MAGIC The same file is produced locally by `build_op_orders_excel.py` in this repo.
 
@@ -436,7 +464,7 @@ ORDER BY total_su DESC;
 -- MAGIC                      total_su=("total_su", "sum"))
 -- MAGIC                 .reset_index().sort_values("total_su", ascending=False))
 -- MAGIC
--- MAGIC by_plant = (pdf.groupby(["shipping_plant", "shipping_plant_desc"], dropna=False)
+-- MAGIC by_plant = (pdf.groupby(["destination_plant", "destination_plant_desc"], dropna=False)
 -- MAGIC                .agg(orders=("order_number", "nunique"),
 -- MAGIC                     loads=("load_number", "nunique"),
 -- MAGIC                     oc_su=("oc_su", "sum"),
@@ -444,10 +472,10 @@ ORDER BY total_su DESC;
 -- MAGIC                     total_su=("total_su", "sum"))
 -- MAGIC                .reset_index().sort_values("total_su", ascending=False))
 -- MAGIC
--- MAGIC out = "/dbfs/FileStore/operational_not_shipped_orders.xlsx"
+-- MAGIC out = "/dbfs/FileStore/operational_not_shipped_orders_interplant_oralcare.xlsx"
 -- MAGIC with pd.ExcelWriter(out, engine="openpyxl") as xw:
 -- MAGIC     pdf.to_excel(xw, sheet_name="Orders", index=False)
 -- MAGIC     by_status.to_excel(xw, sheet_name="Summary by Status", index=False)
--- MAGIC     by_plant.to_excel(xw, sheet_name="Summary by Plant", index=False)
+-- MAGIC     by_plant.to_excel(xw, sheet_name="Summary by Dest Plant", index=False)
 -- MAGIC print("Wrote", out, "rows:", len(pdf))
--- MAGIC print("Download: /files/operational_not_shipped_orders.xlsx")
+-- MAGIC print("Download: /files/operational_not_shipped_orders_interplant_oralcare.xlsx")

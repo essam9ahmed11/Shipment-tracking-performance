@@ -18,7 +18,7 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 TABLE = "hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders"
 WAREHOUSE_ID = "2627fd4c01a8c5a2"
-OUT_XLSX = os.path.join(HERE, "operational_not_shipped_orders.xlsx")
+OUT_XLSX = os.path.join(HERE, "operational_not_shipped_orders_interplant_oralcare.xlsx")
 
 
 def _env():
@@ -107,7 +107,7 @@ def main():
                    .reset_index()
                    .sort_values("total_su", ascending=False))
 
-    by_plant = (df.groupby(["shipping_plant", "shipping_plant_desc"], dropna=False)
+    by_plant = (df.groupby(["destination_plant", "destination_plant_desc"], dropna=False)
                   .agg(orders=("order_number", "nunique"),
                        loads=("load_number", "nunique"),
                        oc_su=("oc_su", "sum"),
@@ -121,6 +121,7 @@ def main():
             "order_number", "load_number", "delivery_number",
             "operational_status", "shipment_stage",
             "shipping_plant", "shipping_plant_desc", "shipping_point",
+            "destination_plant", "destination_plant_desc",
             "destination_location", "origin_state_province",
             "destination_state_province", "is_oral_care",
             "oc_su", "non_oc_su", "total_su",
@@ -136,7 +137,9 @@ def main():
             "SAP origin plant code",
             "Origin plant description",
             "TMS origin shipping point",
-            "Destination location id",
+            "Destination plant code (ship-to mapped to plant, e.g. PB360)",
+            "Destination plant description",
+            "Destination location id (raw TMS)",
             "Origin state/province",
             "Destination state/province",
             "Yes if any oral-care SU on the order-load",
@@ -156,7 +159,7 @@ def main():
     with pd.ExcelWriter(OUT_XLSX, engine="openpyxl") as xw:
         df.to_excel(xw, sheet_name="Orders", index=False)
         by_status.to_excel(xw, sheet_name="Summary by Status", index=False)
-        by_plant.to_excel(xw, sheet_name="Summary by Plant", index=False)
+        by_plant.to_excel(xw, sheet_name="Summary by Dest Plant", index=False)
         readme.to_excel(xw, sheet_name="Readme", index=False)
     print("Done.")
     print(by_status.to_string(index=False))
