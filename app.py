@@ -2,9 +2,11 @@
 P&G Transportation Performance — Flask backend.
 Loads the cached tracking table into memory and serves analytics APIs.
 
-Measures:
-  SOT 1st  = % shipped on/before the FIRST committed pickup (old_pickup_date)
-  SOT fnl  = % shipped on/before the FINAL committed pickup (newest_pickup_date)
+Measures (the "ship" event = Actual GI = gold-layer load_complete_date,
+which matches SAP actual GI on 97.8% of loads; falls back to trailer
+checkout date when load complete is missing):
+  SOT 1st  = % shipped (Actual GI) on/before the FIRST committed pickup (old_pickup_date)
+  SOT fnl  = % shipped (Actual GI) on/before the FINAL committed pickup (newest_pickup_date)
   IOT      = % of loads with iot_on_time = 'Yes'
   # Shipments = count of loads
 """
@@ -37,10 +39,20 @@ def _parse_date(s):
 DATA = []
 for r in ROWS:
     d = dict(zip(COLS, r))
-    co = _parse_date(d.get('checkout_date'))
+    # Effective Actual GI / ship date.
+    # The gold-layer `load_complete_date` matches SAP actual GI on 97.8% of
+    # loads (vs only 51.5% for the trailer checkout date), so we treat it as
+    # the authoritative ship/goods-issue date that drives all measures.
+    # Fall back to the trailer checkout date only when load complete is missing.
+    lc = _parse_date(d.get('load_complete_date'))
+    trailer_co = _parse_date(d.get('checkout_date'))
+    co = lc or trailer_co
     op = _parse_date(d.get('old_pickup_date'))
     np_ = _parse_date(d.get('newest_pickup_date'))
-    d['_checkout'] = co
+    d['_checkout'] = co               # effective Actual GI (drives all measures)
+    d['_trailer_checkout'] = trailer_co  # original trailer check-out (reference)
+    d['_ship_str'] = (d.get('load_complete_date') if lc
+                      else d.get('checkout_date'))
     d['_old_pickup'] = op
     d['_new_pickup'] = np_
     d['_iot_hit'] = 1 if (d.get('iot_on_time') == 'Yes') else 0
@@ -53,18 +65,18 @@ for r in ROWS:
     gi = _parse_date(d.get('sap_actual_gi_date'))
     ar = _parse_date(d.get('actual_arrival_date'))
     lr = _parse_date(d.get('load_ready_date'))
-    lc = _parse_date(d.get('load_complete_date'))
     d['_sap_gi'] = gi
     d['_arrival'] = ar
-    # checkout vs SAP GI gap (days); positive = checkout later than SAP GI
+    # Actual GI vs SAP GI gap (days); positive = Actual GI later than SAP GI
     d['_gi_gap'] = (co - gi).days if (co and gi) else None
-    # Anomaly flags (date-only, only when both sides present)
-    d['_an_arr_before_cko'] = 1 if (ar and co and ar < co) else 0          # arrived before it shipped
+    # Anomaly flags (date-only, only when both sides present).
+    # `co` here is the effective Actual GI (load complete date).
+    d['_an_arr_before_cko'] = 1 if (ar and co and ar < co) else 0          # arrived before goods issue
     d['_an_cko_before_pickup'] = 1 if (co and op and co < op) else 0       # shipped before 1st commit
     d['_an_cko_before_ready'] = 1 if (co and lr and co < lr) else 0        # shipped before load ready
     d['_an_arr_before_finalpickup'] = 1 if (ar and np_ and ar < np_) else 0  # arrived before final pickup
-    d['_an_cko_ne_gi'] = 1 if (co and gi and co != gi) else 0             # checkout != SAP GI (date)
-    # Does SAP GI "resolve" the arrival<checkout case? (GI on/before arrival)
+    d['_an_cko_ne_gi'] = 1 if (co and gi and co != gi) else 0             # Actual GI != SAP GI (date)
+    # Does SAP GI "resolve" the arrival<GI case? (SAP GI on/before arrival)
     d['_an_arr_resolved_by_gi'] = 1 if (d['_an_arr_before_cko'] and gi and ar and gi <= ar) else 0
     d['_anomaly'] = 1 if (d['_an_arr_before_cko'] or d['_an_cko_before_pickup']
                           or d['_an_cko_before_ready'] or d['_an_arr_before_finalpickup']) else 0
@@ -458,7 +470,12 @@ def api_orders():
             'old_pickup_time': r.get('old_pickup_time'),
             'newest_pickup_date': r.get('newest_pickup_date'),
             'newest_pickup_time': r.get('newest_pickup_time'),
-            'checkout_date': r.get('checkout_date'),
+            # `checkout_date` here carries the effective Actual GI (load
+            # complete date) that drives the measures; the raw trailer
+            # check-out is exposed separately for transparency.
+            'checkout_date': r.get('_ship_str'),
+            'load_complete_date': r.get('load_complete_date'),
+            'trailer_checkout_date': r.get('checkout_date'),
             'sap_actual_gi_date': r.get('sap_actual_gi_date'),
             'requested_delivery_date': r.get('requested_delivery_date_from'),
             'actual_arrival_date': r.get('actual_arrival_date'),
@@ -473,15 +490,15 @@ def api_orders():
 # Human-readable anomaly definitions used by /api/anomalies
 ANOMALY_CLASSES = [
     ('arr_before_cko', '_an_arr_before_cko',
-     'Arrived before it shipped', 'actual_arrival_date < checkout_date'),
+     'Arrived before goods issue', 'actual_arrival_date < actual_gi (load complete)'),
     ('cko_before_pickup', '_an_cko_before_pickup',
-     'Shipped before 1st pickup commit', 'checkout_date < old_pickup_date'),
+     'Shipped before 1st pickup commit', 'actual_gi < old_pickup_date'),
     ('cko_before_ready', '_an_cko_before_ready',
-     'Shipped before load ready', 'checkout_date < load_ready_date'),
+     'Shipped before load ready', 'actual_gi < load_ready_date'),
     ('arr_before_finalpickup', '_an_arr_before_finalpickup',
      'Arrived before final pickup', 'actual_arrival_date < newest_pickup_date'),
     ('cko_ne_gi', '_an_cko_ne_gi',
-     'Checkout date \u2260 SAP actual GI', 'checkout_date <> sap_actual_gi_date'),
+     'Actual GI \u2260 SAP actual GI', 'load_complete_date <> sap_actual_gi_date'),
 ]
 
 
@@ -552,8 +569,10 @@ def api_anomalies():
             'newest_pickup_date': r.get('newest_pickup_date'),
             'load_ready_date': r.get('load_ready_date'),
             'load_complete_date': r.get('load_complete_date'),
-            'checkout_date': r.get('checkout_date'),
-            'requested_delivery_date': r.get('requested_delivery_date'),
+            # `checkout_date` carries the effective Actual GI (load complete)
+            'checkout_date': r.get('_ship_str'),
+            'trailer_checkout_date': r.get('checkout_date'),
+            'requested_delivery_date': r.get('requested_delivery_date_from'),
             'actual_arrival_date': r.get('actual_arrival_date'),
             'sap_actual_gi_date': r.get('sap_actual_gi_date'),
             'gap_days': _gap(r),
