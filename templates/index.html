@@ -236,6 +236,8 @@
   .dbadge.d-early { background:#e7f4ec; color:#0a8a3c; }
   .dbadge.d-on { background:#eef1f5; color:#5b6770; }
   .stat-pill { display:inline-block; padding:2px 7px; border-radius:10px; background:#e6effa; color:#00529b; font-size:10px; font-weight:700; white-space:nowrap; }
+  .stat-pill.stage-await { background:#fff1d6; color:#9a6700; }
+  .stat-pill.stage-transit { background:#e3f1e6; color:#1c7a37; }
   .carr-changed { color:#c8102e; font-weight:700; }
   .carr-changed::after { content:' \\21bb'; font-weight:700; }
   .tl { position:relative; height:48px; }
@@ -448,15 +450,18 @@
     <div class="section">
       <h2>Committed but NOT Shipped <span class="pill" id="opsTotal"></span></h2>
       <p class="muted" style="margin:-4px 0 12px;">
-        Interplant + oral-care order-loads that are <b>committed for pickup but not yet completed</b>
-        in TMS (no load-complete). <b>Delay</b> is measured from the goods-issue event
-        (<b>Actual GI</b> = <code>likp.wadat_ist</code> for picked-up loads, otherwise today)
-        against the <b>first</b> and <b>latest</b> pickup commitments from the TMS audit trail.
-        Positive = late.
+        Intersite order-loads committed for pickup in TMS that are <b>not yet load-complete</b>.
+        Two stages: <b><span class="stat-pill stage-await">Awaiting Pickup</span></b> — supposed to
+        ship but <b>not picked up yet</b> (no goods issue), and
+        <b><span class="stat-pill stage-transit">In Transit</span></b> — picked up, not yet delivered.
+        <b>Delay</b> is measured from the goods-issue event (<b>Actual GI</b> =
+        <code>likp.wadat_ist</code> for picked-up loads, otherwise today) against the <b>first</b>
+        and <b>latest</b> pickup commitments from the TMS audit trail. Positive = late / overdue.
       </p>
 
       <div class="kpi-row" id="opsKpiRow">
         <div class="kpi k1"><div class="label"># Orders</div><div class="val" id="opsKOrders">–</div><div class="desc">After filters</div></div>
+        <div class="kpi k5"><div class="label">Awaiting Pickup</div><div class="val" id="opsKAwait">–</div><div class="desc">Committed, not shipped</div></div>
         <div class="kpi k2"><div class="label">Avg Delay vs 1st</div><div class="val" id="opsKAvgFirst">–</div><div class="desc">Days late vs first commit</div></div>
         <div class="kpi k3"><div class="label">Avg Delay vs Latest</div><div class="val" id="opsKAvgLatest">–</div><div class="desc">Days late vs latest commit</div></div>
         <div class="kpi k4"><div class="label">Late vs Latest</div><div class="val" id="opsKLate">–</div><div class="desc">Orders past latest commit</div></div>
@@ -473,6 +478,7 @@
             <option value="actual_gi">Actual GI date</option>
           </select>
         </div>
+        <label class="chk"><input type="checkbox" id="opsAwaitOnly"> Show only <b>awaiting pickup</b> (not shipped)</label>
         <label class="chk"><input type="checkbox" id="opsLateOnly"> Show only <b>late vs latest</b> commit</label>
         <label class="chk"><input type="checkbox" id="opsCarrierChanged"> Show only <b>carrier changed</b></label>
       </div>
@@ -1115,6 +1121,8 @@ async function loadOperational(){
   const s = d.summary;
   document.getElementById('opsTotal').textContent = s.orders.toLocaleString()+' orders';
   document.getElementById('opsKOrders').textContent = s.orders.toLocaleString();
+  document.getElementById('opsKAwait').textContent =
+    (s.awaiting_pickup==null ? '–' : s.awaiting_pickup.toLocaleString());
   document.getElementById('opsKAvgFirst').innerHTML =
     s.avg_days_vs_first==null ? '–' : s.avg_days_vs_first+'<small>d</small>';
   document.getElementById('opsKAvgLatest').innerHTML =
@@ -1127,9 +1135,11 @@ async function loadOperational(){
 
 function renderOps(){
   const rows = document.getElementById('opsRows');
+  const awaitOnly = document.getElementById('opsAwaitOnly').checked;
   const lateOnly = document.getElementById('opsLateOnly').checked;
   const changedOnly = document.getElementById('opsCarrierChanged').checked;
   let list = OPS_ALL;
+  if(awaitOnly) list = list.filter(r => (r.operational_status||'') !== 'In Transit');
   if(lateOnly) list = list.filter(r => (r.days_vs_latest||0) > 0);
   if(changedOnly) list = list.filter(r => r.carrier_changed);
 
@@ -1153,7 +1163,7 @@ function renderOps(){
       <td>${escapeHtml(r.order_number||'—')}</td>
       <td>${escapeHtml(r.load_number||'—')}</td>
       <td>${escapeHtml(r.delivery_number||'—')}</td>
-      <td><span class="stat-pill">${escapeHtml(r.operational_status||'—')}</span></td>
+      <td><span class="stat-pill ${(r.operational_status||'')==='In Transit'?'stage-transit':'stage-await'}">${escapeHtml(r.operational_status||'—')}</span></td>
       <td>${escapeHtml(r.lane||'—')}</td>
       <td title="${escapeHtml(r.destination_plant_desc||'')}">${escapeHtml(r.destination_plant||'—')}</td>
       <td>${r.is_oral_care==='Yes'?'<span class="yes">Yes</span>':escapeHtml(r.is_oral_care||'—')}</td>
@@ -1173,6 +1183,7 @@ function renderOps(){
 }
 
 document.getElementById('opsSort').onchange = loadOperational;
+document.getElementById('opsAwaitOnly').onchange = renderOps;
 document.getElementById('opsLateOnly').onchange = renderOps;
 document.getElementById('opsCarrierChanged').onchange = renderOps;
 

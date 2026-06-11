@@ -329,7 +329,10 @@ JOIN hive_metastore.userdb_essam_ae.ocna_shipment_tracking_intersite t
 -- MAGIC - **INTERPLANT only**: keep order-loads whose destination ship-to maps to a P&G plant
 -- MAGIC   code (`destination_plant IS NOT NULL`). Customer destinations (e.g. Walmart DCs) are
 -- MAGIC   dropped, leaving true plant-to-plant / intersite moves.
--- MAGIC - **Oral care only**: keep order-loads flagged `is_oral_care = 'Yes'`.
+-- MAGIC - **In Transit (already shipped)**: keep **oral care only** (the original tracking scope).
+-- MAGIC - **Awaiting Pickup (committed but NOT shipped)**: keep **all interplant categories** — these
+-- MAGIC   are the "supposed to ship but didn't" operational alert and none are currently oral care,
+-- MAGIC   so restricting them to oral care would hide every awaiting-pickup load.
 -- MAGIC
 -- MAGIC Output table: `hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders`
 
@@ -422,8 +425,16 @@ GROUP BY
   ol.commitment_change_count, ol.first_carrier_name, ol.latest_carrier_name,
   dd.planned_gi_date, dd.actual_gi_date, dd.requested_delivery_date
 HAVING dpm.destination_plant IS NOT NULL   -- INTERPLANT only (destination maps to a plant)
-   AND CASE WHEN SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END) > 0
-            THEN 'Yes' ELSE 'No' END = 'Yes'   -- oral care only
+   AND (
+        -- (a) already-shipped (In Transit) order-loads: oral care only (the original scope)
+        (ol.operational_status = 'In Transit'
+         AND CASE WHEN SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END) > 0
+                  THEN 'Yes' ELSE 'No' END = 'Yes')
+        -- (b) committed-but-NOT-shipped (awaiting pickup) order-loads: ALL interplant
+        --     categories, since none are currently oral care but they are the core
+        --     "supposed to ship but didn't" operational alert.
+        OR ol.operational_status <> 'In Transit'
+       )
 ORDER BY ol.latest_commitment_pickup_date, ol.order_number;
 
 -- COMMAND ----------

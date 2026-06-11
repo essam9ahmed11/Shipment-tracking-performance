@@ -689,9 +689,17 @@ def api_operational():
     dl = [r['_days_vs_latest'] for r in rows if r['_days_vs_latest'] is not None]
     late_first = sum(1 for v in df if v > 0)
     late_latest = sum(1 for v in dl if v > 0)
+    # Stage split: "In Transit" = picked up (shipped, not yet completed);
+    # everything else = awaiting pickup (committed but NOT yet shipped).
+    awaiting_loads = {r.get('load_number') for r in rows
+                      if (r.get('operational_status') or '') != 'In Transit'}
+    intransit_loads = {r.get('load_number') for r in rows
+                       if (r.get('operational_status') or '') == 'In Transit'}
     summary = {
         'orders': n_orders,
         'loads': n_loads,
+        'awaiting_pickup': len(awaiting_loads),
+        'in_transit': len(intransit_loads),
         'oc_su': round(oc_su),
         'total_su': round(total_su),
         'avg_days_vs_first': round(sum(df) / len(df), 1) if df else None,
