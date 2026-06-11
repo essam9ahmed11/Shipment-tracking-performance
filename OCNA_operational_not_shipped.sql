@@ -301,3 +301,153 @@ JOIN hive_metastore.userdb_essam_ae.ocna_shipment_tracking_intersite t
 -- MAGIC   timestamp and differs from the gold `load_complete_date` / `checkout_date` used for the
 -- MAGIC   on-time measures, so exact-date agreement is low while the shipped/not-shipped *signal*
 -- MAGIC   is fully reliable.
+
+-- COMMAND ----------
+
+-- MAGIC %md
+-- MAGIC ## Step 5: Order-level detail (OC / non-OC SU + dates) for the Excel export
+-- MAGIC The load-level table above answers "which loads are not shipped". This step explodes it to
+-- MAGIC **order level** with the units and dates requested for the Excel:
+-- MAGIC - `oc_su` / `non_oc_su` / `total_su` (oral-care split) and the `is_oral_care` filter flag,
+-- MAGIC - `first_commitment_pickup_date` / `latest_commitment_pickup_date` (TMS audit trail),
+-- MAGIC - `requested_delivery_date` (RDD) and `planned_gi_date` (SAP delivery header LIKP).
+-- MAGIC
+-- MAGIC ### Data lineage for the order grain
+-- MAGIC - **Load → delivery**: `na_tms_loads_cdl.shipment_tracking_number` (= SAP delivery `vbeln`).
+-- MAGIC - **Delivery → order + units**: SAP `lips` (`vgbel` = order, `lfimg` = delivery qty,
+-- MAGIC   converted to SU via `marm` where `meinh='SU'`).
+-- MAGIC - **Oral-care flag**: material → `is_oral_care` lookup from `ocna_zsku_intersite_all_fnl`
+-- MAGIC   (`material_number` matched to SAP `matnr` after stripping leading zeros).
+-- MAGIC - **RDD / planned GI**: SAP delivery header `likp` (`lfdat` = RDD, `wadat` = planned GI).
+-- MAGIC
+-- MAGIC Output table: `hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders`
+
+-- COMMAND ----------
+
+CREATE OR REPLACE TABLE hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders AS
+WITH op_loads AS (
+  SELECT load_number AS load_id, operational_status, shipment_stage,
+         shipping_plant, shipping_plant_desc, shipping_point, destination_location,
+         origin_state_province, destination_state_province,
+         first_commitment_pickup_date, latest_commitment_pickup_date,
+         commitment_change_count, first_carrier_name, latest_carrier_name
+  FROM hive_metastore.userdb_essam_ae.ocna_operational_not_shipped
+),
+load_delivery AS (
+  SELECT DISTINCT CAST(load_id AS STRING) AS load_id, shipment_tracking_number AS delivery
+  FROM hive_metastore.userdb_essam_ae.na_tms_loads_cdl
+  WHERE shipment_tracking_number IS NOT NULL
+),
+mat_oc AS (
+  SELECT CAST(material_number AS BIGINT) AS matnr_key, MAX(is_oral_care) AS is_oral_care
+  FROM hive_metastore.userdb_essam_ae.ocna_zsku_intersite_all_fnl
+  WHERE material_number RLIKE '^[0-9]+$' GROUP BY CAST(material_number AS BIGINT)
+),
+delivery_dates AS (
+  SELECT vbeln,
+    MAX(CASE WHEN wadat NOT IN ('','00000000') THEN TO_DATE(wadat,'yyyyMMdd') END) AS planned_gi_date,
+    MAX(CASE WHEN lfdat NOT IN ('','00000000') THEN TO_DATE(lfdat,'yyyyMMdd') END) AS requested_delivery_date
+  FROM cdl_oss_prod.silver_sap_n6p.likp GROUP BY vbeln
+),
+order_lines AS (
+  SELECT
+    o.*, ldv.delivery,
+    CAST(p.vgbel AS STRING) AS order_number,
+    CAST(p.lfimg AS DOUBLE) * COALESCE(su.umren / NULLIF(su.umrez,0), 0) AS line_su,
+    COALESCE(mo.is_oral_care, 'No') AS line_is_oral_care
+  FROM op_loads o
+  JOIN load_delivery ldv ON ldv.load_id = o.load_id
+  JOIN cdl_oss_prod.silver_sap_n6p.lips p
+    ON p.vbeln = ldv.delivery AND p.vgbel IS NOT NULL AND p.vgbel <> ''
+  LEFT JOIN cdl_oss_prod.silver_sap_n6p.marm su
+    ON su.matnr = p.matnr AND su.meinh = 'SU'
+  LEFT JOIN mat_oc mo ON mo.matnr_key = CAST(p.matnr AS BIGINT)
+)
+SELECT
+  ol.order_number,
+  ol.load_id                                                        AS load_number,
+  ol.delivery                                                       AS delivery_number,
+  ol.operational_status,
+  ol.shipment_stage,
+  ol.shipping_plant, ol.shipping_plant_desc, ol.shipping_point,
+  ol.destination_location, ol.origin_state_province, ol.destination_state_province,
+  CASE WHEN SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END) > 0
+       THEN 'Yes' ELSE 'No' END                                     AS is_oral_care,
+  ROUND(SUM(CASE WHEN ol.line_is_oral_care='Yes' THEN ol.line_su ELSE 0 END),2) AS oc_su,
+  ROUND(SUM(CASE WHEN ol.line_is_oral_care<>'Yes' THEN ol.line_su ELSE 0 END),2) AS non_oc_su,
+  ROUND(SUM(ol.line_su),2)                                          AS total_su,
+  ol.first_commitment_pickup_date,
+  ol.latest_commitment_pickup_date,
+  ol.commitment_change_count,
+  ol.first_carrier_name,
+  ol.latest_carrier_name,
+  dd.planned_gi_date,
+  dd.requested_delivery_date
+FROM order_lines ol
+LEFT JOIN delivery_dates dd ON dd.vbeln = ol.delivery
+GROUP BY
+  ol.order_number, ol.load_id, ol.delivery, ol.operational_status, ol.shipment_stage,
+  ol.shipping_plant, ol.shipping_plant_desc, ol.shipping_point,
+  ol.destination_location, ol.origin_state_province, ol.destination_state_province,
+  ol.first_commitment_pickup_date, ol.latest_commitment_pickup_date,
+  ol.commitment_change_count, ol.first_carrier_name, ol.latest_carrier_name,
+  dd.planned_gi_date, dd.requested_delivery_date
+ORDER BY ol.latest_commitment_pickup_date, ol.order_number;
+
+-- COMMAND ----------
+
+-- Order-level summary (this is what the Excel "Summary by Status" sheet shows)
+SELECT
+  operational_status,
+  COUNT(DISTINCT order_number)  AS orders,
+  COUNT(DISTINCT load_number)   AS loads,
+  SUM(CASE WHEN is_oral_care='Yes' THEN 1 ELSE 0 END) AS oral_care_order_loads,
+  ROUND(SUM(oc_su),0)           AS oc_su,
+  ROUND(SUM(non_oc_su),0)       AS non_oc_su,
+  ROUND(SUM(total_su),0)        AS total_su
+FROM hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders
+GROUP BY operational_status
+ORDER BY total_su DESC;
+
+-- COMMAND ----------
+
+-- MAGIC %md
+-- MAGIC ## Step 6: Export the order-level table to an Excel workbook
+-- MAGIC Run this Python cell (switch the cell language to Python in Databricks). It writes a
+-- MAGIC multi-sheet `.xlsx` to DBFS so you can download it from the workspace:
+-- MAGIC `Data > DBFS > FileStore > operational_not_shipped_orders.xlsx`, or via
+-- MAGIC `https://<workspace-host>/files/operational_not_shipped_orders.xlsx`.
+-- MAGIC
+-- MAGIC The same file is produced locally by `build_op_orders_excel.py` in this repo.
+
+-- COMMAND ----------
+
+-- MAGIC %python
+-- MAGIC import pandas as pd
+-- MAGIC
+-- MAGIC pdf = (spark.table("hive_metastore.userdb_essam_ae.ocna_operational_not_shipped_orders")
+-- MAGIC             .toPandas())
+-- MAGIC
+-- MAGIC by_status = (pdf.groupby("operational_status", dropna=False)
+-- MAGIC                 .agg(orders=("order_number", "nunique"),
+-- MAGIC                      loads=("load_number", "nunique"),
+-- MAGIC                      oc_su=("oc_su", "sum"),
+-- MAGIC                      non_oc_su=("non_oc_su", "sum"),
+-- MAGIC                      total_su=("total_su", "sum"))
+-- MAGIC                 .reset_index().sort_values("total_su", ascending=False))
+-- MAGIC
+-- MAGIC by_plant = (pdf.groupby(["shipping_plant", "shipping_plant_desc"], dropna=False)
+-- MAGIC                .agg(orders=("order_number", "nunique"),
+-- MAGIC                     loads=("load_number", "nunique"),
+-- MAGIC                     oc_su=("oc_su", "sum"),
+-- MAGIC                     non_oc_su=("non_oc_su", "sum"),
+-- MAGIC                     total_su=("total_su", "sum"))
+-- MAGIC                .reset_index().sort_values("total_su", ascending=False))
+-- MAGIC
+-- MAGIC out = "/dbfs/FileStore/operational_not_shipped_orders.xlsx"
+-- MAGIC with pd.ExcelWriter(out, engine="openpyxl") as xw:
+-- MAGIC     pdf.to_excel(xw, sheet_name="Orders", index=False)
+-- MAGIC     by_status.to_excel(xw, sheet_name="Summary by Status", index=False)
+-- MAGIC     by_plant.to_excel(xw, sheet_name="Summary by Plant", index=False)
+-- MAGIC print("Wrote", out, "rows:", len(pdf))
+-- MAGIC print("Download: /files/operational_not_shipped_orders.xlsx")
